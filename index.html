@@ -1,0 +1,1065 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Prode Fútbol</title>
+
+<!-- Firebase SDK -->
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getFirestore, doc, collection, getDoc, getDocs, setDoc, updateDoc, onSnapshot, serverTimestamp }
+  from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+// ─────────────────────────────────────────────────────────────
+// 🔧 CONFIGURACIÓN FIREBASE — reemplazá estos valores con los
+//    de tu proyecto en https://console.firebase.google.com
+// ─────────────────────────────────────────────────────────────
+ const firebaseConfig = {
+    apiKey: "AIzaSyAiKaY0oqwq1vijs-VzzqSOnZRYkraYZqM",
+    authDomain: "prode-futbol-d1109.firebaseapp.com",
+    projectId: "prode-futbol-d1109",
+    storageBucket: "prode-futbol-d1109.firebasestorage.app",
+    messagingSenderId: "993506133499",
+    appId: "1:993506133499:web:d633a047b97a888568375e",
+    measurementId: "G-7R74H757MB"
+  };
+// ─────────────────────────────────────────────────────────────
+
+const app = initializeApp(firebaseConfig);
+const db  = getFirestore(app);
+
+// ── Estado local ─────────────────────────────────────────────
+let state = {
+  rol: null,          // 'admin' | 'participante'
+  nombreUsuario: null,
+  adminPass: null,
+  torneoActivo: null,
+  data: {             // snapshot local de Firestore
+    config: {},       // participantes[], torneos[]
+    torneos: {}       // { [torneoId]: { ...torneo } }
+  }
+};
+
+// Listeners activos de Firestore (para cancelarlos al cambiar)
+let unsubscribers = [];
+
+// ── Helpers Firestore ────────────────────────────────────────
+async function fsGet(path) {
+  const ref = docRef(path);
+  const snap = await getDoc(ref);
+  return snap.exists() ? snap.data() : null;
+}
+function docRef(path) {
+  const parts = path.split('/');
+  // alternamos collection / doc
+  let ref = null;
+  parts.forEach((p, i) => {
+    if (i % 2 === 0) ref = ref ? collection(ref, p) : collection(db, p);
+    else             ref = doc(ref, p);
+  });
+  return ref;
+}
+async function fsSet(path, data) {
+  await setDoc(docRef(path), data, { merge: true });
+}
+async function fsUpdate(path, data) {
+  await updateDoc(docRef(path), data);
+}
+function fsListen(path, cb) {
+  const unsub = onSnapshot(docRef(path), snap => {
+    cb(snap.exists() ? snap.data() : null);
+  });
+  unsubscribers.push(unsub);
+  return unsub;
+}
+function stopListeners() {
+  unsubscribers.forEach(u => u());
+  unsubscribers = [];
+}
+
+// ── Acceso a datos locales ───────────────────────────────────
+function cfg()     { return state.data.config; }
+function partsGlobal() { return cfg().participantes || []; }
+function torneos() { return cfg().torneos || []; }
+function T()       { return state.torneoActivo !== null ? state.data.torneos[state.torneoActivo] : null; }
+function partsT()  { return T()?.participantes || []; }
+function estaAusente(fi, part) { return !!(T()?.ausencias?.[`${fi}-${part}`]); }
+
+// ── INICIALIZACIÓN ───────────────────────────────────────────
+window.addEventListener('DOMContentLoaded', () => {
+  renderLogin();
+});
+
+// ─────────────────────────────────────────────────────────────
+// LOGIN
+// ─────────────────────────────────────────────────────────────
+function renderLogin() {
+  document.getElementById('app').innerHTML = `
+    <div class="login-wrap">
+      <div class="login-card">
+        <div class="login-logo">⚽</div>
+        <h1 class="login-title">Prode Fútbol</h1>
+        <p class="login-sub">Ingresá tu nombre para continuar</p>
+        <input id="login-nombre" class="login-input" placeholder="Tu nombre..." autocomplete="off"/>
+        <button class="btn btn-primary" style="width:100%;margin-top:8px" onclick="loginParticipante()">Entrar como participante</button>
+        <div class="login-divider">o</div>
+        <input id="login-pass" class="login-input" type="password" placeholder="Contraseña admin..."/>
+        <button class="btn" style="width:100%;margin-top:8px;border-color:var(--color-border-secondary)" onclick="loginAdmin()">Entrar como administrador</button>
+        <p id="login-error" style="color:var(--color-text-danger);font-size:12px;margin-top:8px;text-align:center;display:none"></p>
+      </div>
+    </div>`;
+}
+
+window.loginParticipante = async function() {
+  const nombre = document.getElementById('login-nombre').value.trim();
+  if (!nombre) return showLoginError('Escribí tu nombre');
+  // verificar que sea un participante registrado
+  const cfg = await fsGet('config/global');
+  if (!cfg) return showLoginError('No hay datos configurados aún. Pedile al admin que configure el prode.');
+  if (!(cfg.participantes||[]).includes(nombre)) return showLoginError(`"${nombre}" no está en la lista de participantes.`);
+  state.rol = 'participante';
+  state.nombreUsuario = nombre;
+  await initApp();
+};
+
+window.loginAdmin = async function() {
+  const pass = document.getElementById('login-pass').value;
+  const cfg = await fsGet('config/global');
+  const adminPass = cfg?.adminPass || 'admin1234'; // contraseña por defecto
+  if (pass !== adminPass) return showLoginError('Contraseña incorrecta');
+  state.rol = 'admin';
+  state.nombreUsuario = 'Admin';
+  await initApp();
+};
+
+function showLoginError(msg) {
+  const el = document.getElementById('login-error');
+  el.textContent = msg; el.style.display = '';
+}
+
+// ─────────────────────────────────────────────────────────────
+// INICIALIZAR APP (post login)
+// ─────────────────────────────────────────────────────────────
+async function initApp() {
+  // Suscribirse a config global
+  fsListen('config/global', data => {
+    state.data.config = data || { participantes: [], torneos: [], adminPass: 'admin1234' };
+    refreshUI();
+  });
+  renderShell();
+}
+
+function renderShell() {
+  const isAdmin = state.rol === 'admin';
+  document.getElementById('app').innerHTML = `
+    <div class="layout">
+      <div class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+          <span class="sidebar-logo">⚽</span>
+          <div>
+            <div style="font-size:13px;font-weight:500">${state.nombreUsuario}</div>
+            <div style="font-size:11px;color:var(--color-text-secondary)">${isAdmin?'Administrador':'Participante'}</div>
+          </div>
+          <button class="btn btn-sm" onclick="logout()" style="margin-left:auto;font-size:11px">Salir</button>
+        </div>
+        ${isAdmin ? `
+        <div class="sidebar-section">Global</div>
+        <div class="nav-item" id="nav-participantes" onclick="navTo('participantes')">👥 Participantes</div>
+        <div class="nav-item" id="nav-config" onclick="navTo('config')">⚙️ Configuración</div>` : ''}
+        <div class="sidebar-section">Torneos</div>
+        <div id="torneos-nav"></div>
+        ${isAdmin ? `<div class="nav-item btn-primary-soft" style="text-align:center;font-size:12px;margin-top:4px" onclick="navTo('nuevo-torneo')">+ Nuevo torneo</div>` : ''}
+      </div>
+      <div class="content" id="content">
+        <div class="empty-state">Seleccioná un torneo del menú</div>
+      </div>
+    </div>`;
+}
+
+function refreshUI() {
+  renderTorneosNav();
+  // Suscribirse a torneos
+  const ts = torneos();
+  ts.forEach(t => {
+    if (!state.data.torneos[t.id]) {
+      state.data.torneos[t.id] = null;
+      fsListen(`torneos/${t.id}`, data => {
+        state.data.torneos[t.id] = data || {};
+        if (state.torneoActivo === t.id) refreshTorneoView();
+      });
+    }
+  });
+}
+
+function renderTorneosNav() {
+  const nav = document.getElementById('torneos-nav');
+  if (!nav) return;
+  const ts = torneos();
+  if (!ts.length) { nav.innerHTML = '<div style="font-size:12px;color:var(--color-text-tertiary);padding:6px 10px">Sin torneos</div>'; return; }
+  nav.innerHTML = ts.map(t => `
+    <div class="nav-item ${state.torneoActivo===t.id?'active':''}" onclick="selectTorneo('${t.id}')">
+      <span>${t.nombre}</span>
+      <span class="t-badge">${t.sistema==='1x2'?'1X2':'Exacto'}</span>
+    </div>`).join('');
+}
+
+window.selectTorneo = function(id) {
+  state.torneoActivo = id;
+  renderTorneosNav();
+  refreshTorneoView();
+};
+
+window.navTo = function(dest) {
+  state.torneoActivo = null;
+  renderTorneosNav();
+  const content = document.getElementById('content');
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  const navEl = document.getElementById('nav-' + dest);
+  if (navEl) navEl.classList.add('active');
+
+  if (dest === 'participantes') renderViewParticipantes(content);
+  else if (dest === 'config') renderViewConfig(content);
+  else if (dest === 'nuevo-torneo') renderViewNuevoTorneo(content);
+};
+
+window.logout = function() {
+  stopListeners();
+  state = { rol:null, nombreUsuario:null, adminPass:null, torneoActivo:null, data:{ config:{}, torneos:{} } };
+  renderLogin();
+};
+
+// ─────────────────────────────────────────────────────────────
+// VISTA TORNEO
+// ─────────────────────────────────────────────────────────────
+function refreshTorneoView() {
+  const content = document.getElementById('content');
+  if (!content || state.torneoActivo === null) return;
+  const t = T();
+  if (!t) { content.innerHTML = '<div class="empty-state">Cargando...</div>'; return; }
+
+  const meta = torneos().find(x => x.id === state.torneoActivo) || {};
+  const isAdmin = state.rol === 'admin';
+
+  const tabs = isAdmin
+    ? ['participantes-t','equipos','fechas','resultados','pronosticos','pagos','premios','posiciones']
+    : ['pronosticos','posiciones'];
+  const tabLabels = { 'participantes-t':'Participantes','equipos':'Equipos','fechas':'Fechas',
+    'resultados':'Resultados','pronosticos':'Pronósticos','pagos':'Pagos','premios':'Premios','posiciones':'Posiciones' };
+
+  // Recordar tab activo
+  const curTab = content.dataset.activeTab;
+  const defaultTab = isAdmin ? 'participantes-t' : 'pronosticos';
+  const activeTab = tabs.includes(curTab) ? curTab : defaultTab;
+
+  content.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:6px">
+      <div>
+        <span style="font-size:14px;font-weight:500">${meta.nombre||''}</span>
+        <span style="font-size:11px;padding:2px 8px;border-radius:10px;background:var(--color-background-info);color:var(--color-text-info);margin-left:8px">${meta.sistema==='1x2'?'1X2':'Resultado exacto'}</span>
+      </div>
+      ${isAdmin ? `<button class="btn btn-sm btn-danger" onclick="eliminarTorneo()">Eliminar torneo</button>` : ''}
+    </div>
+    <div class="tabs">${tabs.map(id=>`<div class="tab ${id===activeTab?'active':''}" onclick="switchTab('${id}',this)">${tabLabels[id]}</div>`).join('')}</div>
+    <div id="tab-content"></div>`;
+
+  content.dataset.activeTab = activeTab;
+  renderTab(activeTab);
+}
+
+window.switchTab = function(id, el) {
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById('content').dataset.activeTab = id;
+  renderTab(id);
+};
+
+function renderTab(id) {
+  const el = document.getElementById('tab-content');
+  if (!el) return;
+  const map = {
+    'participantes-t': renderTabParticipantes,
+    'equipos':         renderTabEquipos,
+    'fechas':          renderTabFechas,
+    'resultados':      renderTabResultados,
+    'pronosticos':     renderTabPronosticos,
+    'pagos':           renderTabPagos,
+    'premios':         renderTabPremios,
+    'posiciones':      renderTabPosiciones,
+  };
+  if (map[id]) map[id](el);
+}
+
+// ─────────────────────────────────────────────────────────────
+// ADMIN — VISTAS GLOBALES
+// ─────────────────────────────────────────────────────────────
+function renderViewParticipantes(content) {
+  content.innerHTML = `
+    <p class="section-title">Participantes globales</p>
+    <p class="sub">Personas que pueden participar en cualquier torneo. Para inscribirlos en un torneo específico, entrá al torneo → Participantes.</p>
+    <div class="row">
+      <input id="part-input" placeholder="Nombre..." onkeydown="if(event.key==='Enter')addParticipanteGlobal()"/>
+      <button class="btn btn-primary btn-sm" onclick="addParticipanteGlobal()">Agregar</button>
+    </div>
+    <div class="chips" id="parts-chips">${renderChipsHTML(partsGlobal(), 'removeParticipanteGlobal')}</div>`;
+}
+
+window.addParticipanteGlobal = async function() {
+  const v = document.getElementById('part-input').value.trim();
+  if (!v || partsGlobal().includes(v)) return;
+  const nueva = [...partsGlobal(), v];
+  await fsSet('config/global', { participantes: nueva });
+  document.getElementById('part-input').value = '';
+};
+
+window.removeParticipanteGlobal = async function(i) {
+  const nueva = partsGlobal().filter((_,idx)=>idx!==i);
+  await fsSet('config/global', { participantes: nueva });
+};
+
+function renderViewConfig(content) {
+  const pass = cfg().adminPass || 'admin1234';
+  content.innerHTML = `
+    <p class="section-title">Configuración</p>
+    <div class="card">
+      <p style="font-size:13px;font-weight:500;margin-bottom:8px">Contraseña de administrador</p>
+      <div class="row">
+        <input id="new-pass" type="password" value="${pass}" style="max-width:200px"/>
+        <button class="btn btn-primary btn-sm" onclick="saveAdminPass()">Guardar</button>
+      </div>
+      <p class="sub">Contraseña actual: <code>${pass}</code></p>
+    </div>`;
+}
+window.saveAdminPass = async function() {
+  const v = document.getElementById('new-pass').value.trim();
+  if (!v) return;
+  await fsSet('config/global', { adminPass: v });
+  alert('Contraseña actualizada');
+};
+
+function renderViewNuevoTorneo(content) {
+  content.innerHTML = `
+    <p class="section-title">Nuevo torneo</p>
+    <div class="card" style="max-width:420px">
+      <div class="row"><label class="lbl">Nombre:</label><input id="nuevo-nombre" placeholder="Ej: Apertura 2025..."/></div>
+      <div class="row"><label class="lbl">Sistema:</label>
+        <select id="nuevo-sistema">
+          <option value="1x2">1X2 — local / empate / visita (1 pt)</option>
+          <option value="exacto">Resultado exacto (3 pts exacto, 1 pt signo)</option>
+        </select>
+      </div>
+      <div class="row" style="margin-bottom:0">
+        <button class="btn btn-primary btn-sm" onclick="crearTorneo()">Crear</button>
+        <button class="btn btn-sm" onclick="selectTorneo(null)">Cancelar</button>
+      </div>
+    </div>`;
+}
+
+window.crearTorneo = async function() {
+  const nombre = document.getElementById('nuevo-nombre').value.trim();
+  const sistema = document.getElementById('nuevo-sistema').value;
+  if (!nombre) return;
+  const id = 'torneo_' + Date.now();
+  const meta = { id, nombre, sistema };
+  const nuevos = [...torneos(), meta];
+  await fsSet('config/global', { torneos: nuevos });
+  await fsSet(`torneos/${id}`, { participantes:[], equipos:[], fechas:[], pronosticos:{}, resultados:{}, ausencias:{}, pagos:{}, cuota:500 });
+  state.torneoActivo = id;
+  renderShell();
+  refreshUI();
+  setTimeout(()=>selectTorneo(id), 300);
+};
+
+window.eliminarTorneo = async function() {
+  if (!confirm('¿Eliminar este torneo y todos sus datos?')) return;
+  const id = state.torneoActivo;
+  const nuevos = torneos().filter(t=>t.id!==id);
+  await fsSet('config/global', { torneos: nuevos });
+  await fsSet(`torneos/${id}`, { _eliminado: true });
+  state.torneoActivo = null;
+  renderTorneosNav();
+  document.getElementById('content').innerHTML = '<div class="empty-state">Seleccioná un torneo</div>';
+};
+
+// ─────────────────────────────────────────────────────────────
+// TAB — PARTICIPANTES DEL TORNEO
+// ─────────────────────────────────────────────────────────────
+function renderTabParticipantes(el) {
+  const t = T(); if (!t) return;
+  const asignados = t.participantes || [];
+  el.innerHTML = `
+    <p class="sub" style="margin-top:4px">Seleccioná quiénes juegan en este torneo.</p>
+    ${partsGlobal().length === 0
+      ? '<p class="sub">No hay participantes globales. Agregá desde el menú → Participantes.</p>'
+      : partsGlobal().map(p => {
+          const ok = asignados.includes(p);
+          return `<div class="part-check-row ${ok?'assigned':''}">
+            <span>${p}</span>
+            <button class="btn btn-sm ${ok?'btn-danger':'btn-primary'}" onclick="togglePartTorneo('${esc(p)}')">${ok?'Quitar':'Agregar'}</button>
+          </div>`;
+        }).join('')}`;
+}
+window.togglePartTorneo = async function(nombre) {
+  const t = T(); if (!t) return;
+  const lista = [...(t.participantes||[])];
+  const idx = lista.indexOf(nombre);
+  if (idx >= 0) lista.splice(idx, 1); else lista.push(nombre);
+  await fsUpdate(`torneos/${state.torneoActivo}`, { participantes: lista });
+};
+
+// ─────────────────────────────────────────────────────────────
+// TAB — EQUIPOS
+// ─────────────────────────────────────────────────────────────
+function renderTabEquipos(el) {
+  const t = T(); if (!t) return;
+  el.innerHTML = `
+    <p class="sub" style="margin-top:4px">Equipos de este torneo.</p>
+    <div class="row">
+      <input id="eq-input" placeholder="Nombre del equipo..." onkeydown="if(event.key==='Enter')addEquipo()"/>
+      <button class="btn btn-primary btn-sm" onclick="addEquipo()">Agregar</button>
+    </div>
+    <div class="chips">${renderChipsHTML(t.equipos||[], 'removeEquipo')}</div>`;
+}
+window.addEquipo = async function() {
+  const v = document.getElementById('eq-input').value.trim(); if (!v) return;
+  const t = T(); if (!t) return;
+  const lista = [...(t.equipos||[])];
+  if (lista.includes(v)) return;
+  lista.push(v);
+  await fsUpdate(`torneos/${state.torneoActivo}`, { equipos: lista });
+  document.getElementById('eq-input').value = '';
+};
+window.removeEquipo = async function(i) {
+  const t = T(); if (!t) return;
+  const lista = [...(t.equipos||[])]; lista.splice(i, 1);
+  await fsUpdate(`torneos/${state.torneoActivo}`, { equipos: lista });
+};
+
+// ─────────────────────────────────────────────────────────────
+// TAB — FECHAS
+// ─────────────────────────────────────────────────────────────
+function equiposLibresFecha(fi) {
+  const t = T(); if (!t) return [];
+  const usados = new Set();
+  (t.fechas?.[fi]?.partidos||[]).forEach(p=>{ usados.add(p.local); usados.add(p.visita); });
+  return (t.equipos||[]).filter(e=>!usados.has(e));
+}
+
+function renderTabFechas(el) {
+  const t = T(); if (!t) return;
+  const fechas = t.fechas || [];
+  el.innerHTML = `
+    <div class="row" style="margin-top:4px">
+      <input id="fecha-nombre" placeholder="Ej: Fecha 1..."/>
+      <button class="btn btn-primary btn-sm" onclick="addFecha()">Crear fecha</button>
+    </div>
+    ${fechas.length === 0 ? '<p class="sub">No hay fechas aún.</p>' : fechas.map((f, fi) => {
+      const libres = equiposLibresFecha(fi);
+      const opts = libres.map(e=>`<option>${e}</option>`).join('');
+      return `<div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <span style="font-weight:500;font-size:13px">${f.nombre}</span>
+          <button class="btn btn-sm btn-danger" onclick="removeFecha(${fi})">Eliminar</button>
+        </div>
+        ${(f.partidos||[]).map((p,pi)=>`
+          <div class="row" style="margin-bottom:3px">
+            <span style="flex:1;font-size:12px">${p.local} vs ${p.visita}</span>
+            <button class="btn btn-sm btn-danger" onclick="removePartido(${fi},${pi})">✕</button>
+          </div>`).join('')}
+        ${libres.length >= 2
+          ? `<div class="row" style="margin-top:6px">
+              <select id="local-${fi}">${opts}</select>
+              <span style="color:var(--color-text-tertiary);font-size:11px">vs</span>
+              <select id="visita-${fi}">${opts}</select>
+              <button class="btn btn-sm btn-primary" onclick="addPartido(${fi})">+ Partido</button>
+             </div>`
+          : `<p style="font-size:11px;color:var(--color-text-secondary);margin-top:6px">${libres.length===1?'Solo queda 1 equipo disponible.':'Todos los equipos están asignados en esta fecha.'}</p>`}
+      </div>`;
+    }).join('')}`;
+}
+
+window.addFecha = async function() {
+  const n = document.getElementById('fecha-nombre').value.trim(); if (!n) return;
+  const t = T(); if (!t) return;
+  const fechas = [...(t.fechas||[]), { nombre: n, partidos: [] }];
+  await fsUpdate(`torneos/${state.torneoActivo}`, { fechas });
+  document.getElementById('fecha-nombre').value = '';
+};
+window.removeFecha = async function(fi) {
+  const t = T(); if (!t) return;
+  const fechas = [...(t.fechas||[])]; fechas.splice(fi, 1);
+  await fsUpdate(`torneos/${state.torneoActivo}`, { fechas });
+};
+window.addPartido = async function(fi) {
+  const t = T(); if (!t) return;
+  const l = document.getElementById('local-'+fi).value;
+  const v = document.getElementById('visita-'+fi).value;
+  if (!l || !v || l === v) { alert('Seleccioná dos equipos distintos'); return; }
+  const fechas = JSON.parse(JSON.stringify(t.fechas||[]));
+  fechas[fi].partidos = [...(fechas[fi].partidos||[]), { local: l, visita: v }];
+  await fsUpdate(`torneos/${state.torneoActivo}`, { fechas });
+};
+window.removePartido = async function(fi, pi) {
+  const t = T(); if (!t) return;
+  const fechas = JSON.parse(JSON.stringify(t.fechas||[]));
+  fechas[fi].partidos.splice(pi, 1);
+  await fsUpdate(`torneos/${state.torneoActivo}`, { fechas });
+};
+
+// ─────────────────────────────────────────────────────────────
+// TAB — RESULTADOS (solo admin)
+// ─────────────────────────────────────────────────────────────
+function renderTabResultados(el) {
+  const t = T(); if (!t) return;
+  const fechas = t.fechas || [];
+  if (!fechas.length) { el.innerHTML = '<p class="sub" style="margin-top:4px">No hay fechas.</p>'; return; }
+  const meta = torneos().find(x=>x.id===state.torneoActivo)||{};
+
+  el.innerHTML = fechas.map((f, fi) => `
+    <div class="card">
+      <p style="font-weight:500;font-size:13px;margin-bottom:8px">${f.nombre}</p>
+      ${(f.partidos||[]).length === 0
+        ? '<p class="sub">Sin partidos.</p>'
+        : (f.partidos||[]).map((p, pi) => {
+            const signo = t.resultados?.[`${fi}-${pi}-signo`] || '';
+            const res   = t.resultados?.[`${fi}-${pi}`] || { gl:'', gv:'' };
+            return `<div class="partido-block">
+              <div class="partido-header">
+                <div class="team-name">${p.local}</div><div class="vs-label">vs</div><div class="team-name">${p.visita}</div>
+              </div>
+              ${meta.sistema === '1x2'
+                ? `<div class="signos">
+                    <button class="signo-btn ${signo==='1'?'sel-1':''}" onclick="setResSigno(${fi},${pi},'1')">1</button>
+                    <button class="signo-btn ${signo==='X'?'sel-X':''}" onclick="setResSigno(${fi},${pi},'X')">X</button>
+                    <button class="signo-btn ${signo==='2'?'sel-2':''}" onclick="setResSigno(${fi},${pi},'2')">2</button>
+                  </div>`
+                : `<div class="score-wrap">
+                    <input class="score-inp" type="number" min="0" value="${res.gl}" placeholder="-" onchange="setResExacto(${fi},${pi},'gl',this.value)"/>
+                    <span style="color:var(--color-text-tertiary)">-</span>
+                    <input class="score-inp" type="number" min="0" value="${res.gv}" placeholder="-" onchange="setResExacto(${fi},${pi},'gv',this.value)"/>
+                  </div>${signo?`<div style="text-align:center;margin-top:4px"><span class="badge ${signo==='1'?'badge-green':signo==='X'?'badge-amber':'badge-red'}">${signo==='1'?'Local gana':signo==='X'?'Empate':'Visita gana'}</span></div>`:''}`}
+            </div>`;
+          }).join('')}
+    </div>`).join('');
+}
+
+window.setResSigno = async function(fi, pi, signo) {
+  const t = T(); if (!t) return;
+  const res = JSON.parse(JSON.stringify(t.resultados||{}));
+  const k = `${fi}-${pi}-signo`;
+  res[k] = res[k] === signo ? '' : signo;
+  await fsUpdate(`torneos/${state.torneoActivo}`, { resultados: res });
+};
+window.setResExacto = async function(fi, pi, campo, val) {
+  const t = T(); if (!t) return;
+  const res = JSON.parse(JSON.stringify(t.resultados||{}));
+  const key = `${fi}-${pi}`;
+  if (!res[key]) res[key] = { gl:'', gv:'' };
+  res[key][campo] = val;
+  const r = res[key];
+  if (r.gl !== '' && r.gv !== '') {
+    const l = parseInt(r.gl), v = parseInt(r.gv);
+    res[`${fi}-${pi}-signo`] = l > v ? '1' : l === v ? 'X' : '2';
+  }
+  await fsUpdate(`torneos/${state.torneoActivo}`, { resultados: res });
+};
+
+// ─────────────────────────────────────────────────────────────
+// TAB — PRONÓSTICOS
+// ─────────────────────────────────────────────────────────────
+function renderTabPronosticos(el) {
+  const t = T(); if (!t) return;
+  const meta = torneos().find(x=>x.id===state.torneoActivo)||{};
+  const fechas = t.fechas || [];
+  const isAdmin = state.rol === 'admin';
+
+  // Selector de fecha
+  let fi = parseInt(el.dataset.fi || '0');
+  if (fi >= fechas.length) fi = 0;
+
+  if (!fechas.length) { el.innerHTML = '<p class="sub" style="margin-top:4px">No hay fechas configuradas.</p>'; return; }
+
+  const f = fechas[fi];
+  if (!f) return;
+
+  // Qué participantes mostrar
+  const partsAMostrar = isAdmin ? partsT() : partsT().filter(p => p === state.nombreUsuario);
+
+  el.dataset.fi = fi;
+  el.innerHTML = `
+    <div class="row" style="margin-top:4px">
+      <label style="font-size:12px;white-space:nowrap">Fecha:</label>
+      <select onchange="cambiarFechaPron(this.value)" style="max-width:200px">
+        ${fechas.map((f,i)=>`<option value="${i}" ${i===fi?'selected':''}>${f.nombre}</option>`).join('')}
+      </select>
+    </div>
+    ${(f.partidos||[]).length === 0
+      ? '<p class="sub">Sin partidos en esta fecha.</p>'
+      : partsAMostrar.map(part => {
+          const ausente = estaAusente(fi, part);
+          let totalPts = null;
+          const prons = (f.partidos||[]).map((p, pi) => {
+            const pts = calcPuntos(fi, pi, part, t, meta);
+            if (pts !== null) totalPts = (totalPts||0) + pts;
+            const signo = t.pronosticos?.[`${fi}-${pi}-${esc(part)}-signo`] || '';
+            const pron  = t.pronosticos?.[`${fi}-${pi}-${esc(part)}`] || { gl:'', gv:'' };
+            return `<div class="partido-block">
+              <div class="partido-header">
+                <div class="team-name" style="font-size:11px">${p.local}</div>
+                <div class="vs-label">vs</div>
+                <div class="team-name" style="font-size:11px">${p.visita}</div>
+              </div>
+              ${meta.sistema === '1x2'
+                ? `<div class="signos">
+                    <button class="signo-btn ${signo==='1'?'sel-1':''}" onclick="setPronSigno(${fi},${pi},'${esc(part)}','1')">1</button>
+                    <button class="signo-btn ${signo==='X'?'sel-X':''}" onclick="setPronSigno(${fi},${pi},'${esc(part)}','X')">X</button>
+                    <button class="signo-btn ${signo==='2'?'sel-2':''}" onclick="setPronSigno(${fi},${pi},'${esc(part)}','2')">2</button>
+                  </div>`
+                : `<div class="score-wrap">
+                    <input class="score-inp" type="number" min="0" value="${pron.gl}" placeholder="-" onchange="setPronExacto(${fi},${pi},'${esc(part)}','gl',this.value)"/>
+                    <span style="color:var(--color-text-tertiary)">-</span>
+                    <input class="score-inp" type="number" min="0" value="${pron.gv}" placeholder="-" onchange="setPronExacto(${fi},${pi},'${esc(part)}','gv',this.value)"/>
+                  </div>`}
+              ${pts !== null ? `<div style="text-align:center;margin-top:5px"><span class="badge ${pts>0?'badge-green':'badge-red'}">${pts} pt${pts!==1?'s':''}</span></div>` : ''}
+            </div>`;
+          }).join('');
+
+          return `<div class="card" ${ausente?'style="opacity:.5"':''}>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+              <p style="font-weight:500;font-size:13px">${part}</p>
+              ${isAdmin ? `<button class="ausencia-toggle ${ausente?'ausente':''}" onclick="toggleAusencia(${fi},'${esc(part)}')">${ausente?'⛔ No juega':'✓ Juega'}</button>` : ''}
+            </div>
+            ${ausente
+              ? '<p style="font-size:12px;color:var(--color-text-secondary);text-align:center;padding:6px 0">No juega en esta fecha</p>'
+              : prons + (totalPts !== null ? `<div style="text-align:right;font-size:11px;color:var(--color-text-secondary);margin-top:4px">Total fecha: <strong>${totalPts} pts</strong></div>` : '')}
+          </div>`;
+        }).join('')}`;
+}
+
+window.cambiarFechaPron = function(fi) {
+  const el = document.getElementById('tab-content');
+  el.dataset.fi = fi;
+  renderTab('pronosticos');
+};
+
+window.setPronSigno = async function(fi, pi, part, signo) {
+  const t = T(); if (!t) return;
+  const prons = JSON.parse(JSON.stringify(t.pronosticos||{}));
+  const k = `${fi}-${pi}-${part}-signo`;
+  prons[k] = prons[k] === signo ? '' : signo;
+  await fsUpdate(`torneos/${state.torneoActivo}`, { pronosticos: prons });
+};
+window.setPronExacto = async function(fi, pi, part, campo, val) {
+  const t = T(); if (!t) return;
+  const prons = JSON.parse(JSON.stringify(t.pronosticos||{}));
+  const key = `${fi}-${pi}-${part}`;
+  if (!prons[key]) prons[key] = { gl:'', gv:'' };
+  prons[key][campo] = val;
+  const p = prons[key];
+  if (p.gl !== '' && p.gv !== '') {
+    const l = parseInt(p.gl), v = parseInt(p.gv);
+    prons[`${fi}-${pi}-${part}-signo`] = l > v ? '1' : l === v ? 'X' : '2';
+  }
+  await fsUpdate(`torneos/${state.torneoActivo}`, { pronosticos: prons });
+};
+window.toggleAusencia = async function(fi, part) {
+  const t = T(); if (!t) return;
+  const aus = JSON.parse(JSON.stringify(t.ausencias||{}));
+  const k = `${fi}-${part}`;
+  aus[k] = !aus[k];
+  await fsUpdate(`torneos/${state.torneoActivo}`, { ausencias: aus });
+};
+
+// ─────────────────────────────────────────────────────────────
+// TAB — PAGOS (solo admin)
+// ─────────────────────────────────────────────────────────────
+function renderTabPagos(el) {
+  const t = T(); if (!t) return;
+  const parts = partsT();
+  const fechas = t.fechas || [];
+  if (!parts.length || !fechas.length) {
+    el.innerHTML = '<p class="sub" style="margin-top:4px">Configurá fechas y participantes primero.</p>'; return;
+  }
+  const cuota = t.cuota || 500;
+  el.innerHTML = `
+    <div class="row" style="margin-top:4px">
+      <label style="font-size:12px;white-space:nowrap">Cuota por fecha:</label>
+      <input id="cuota-monto" type="number" min="0" step="100" value="${cuota}" style="max-width:80px" onchange="saveCuota(this.value)"/>
+      <span style="font-size:12px;color:var(--color-text-secondary)">$</span>
+    </div>
+    <div style="overflow-x:auto"><table>
+      <thead><tr><th>Participante</th>${fechas.map(f=>`<th>${f.nombre}</th>`).join('')}<th>Debe</th><th>Pagado</th><th>Saldo</th></tr></thead>
+      <tbody>
+        ${parts.map(part => {
+          let debe = 0, pagado = 0;
+          const celdas = fechas.map((f, fi) => {
+            const ausente = estaAusente(fi, part);
+            const p = t.pagos?.[`${part}-${fi}`] || 0;
+            if (!ausente) debe += cuota;
+            pagado += p;
+            if (ausente) return `<td><span class="badge badge-gray">No juega</span></td>`;
+            const diff = p - cuota;
+            return `<td><div style="display:flex;gap:3px;align-items:center">
+              <input type="number" min="0" step="100" value="${p}" style="width:62px;padding:3px 5px;font-size:12px;border:0.5px solid var(--color-border-secondary);border-radius:var(--border-radius-md);background:var(--color-background-primary);color:var(--color-text-primary)" onchange="savePago('${esc(part)}',${fi},this.value)"/>
+              ${diff===0?'<span class="badge badge-green">OK</span>':diff>0?`<span class="badge badge-amber">+${diff}</span>`:`<span class="badge badge-red">${diff}</span>`}
+            </div></td>`;
+          }).join('');
+          const saldo = pagado - debe;
+          return `<tr><td style="font-weight:500;white-space:nowrap">${part}</td>${celdas}
+            <td>$${debe.toLocaleString()}</td><td>$${pagado.toLocaleString()}</td>
+            <td><span class="badge ${saldo>=0?'badge-green':'badge-red'}">${saldo>=0?'+':''}$${saldo.toLocaleString()}</span></td></tr>`;
+        }).join('')}
+      </tbody>
+    </table></div>`;
+}
+window.saveCuota = async function(val) {
+  await fsUpdate(`torneos/${state.torneoActivo}`, { cuota: parseFloat(val)||500 });
+};
+window.savePago = async function(part, fi, val) {
+  const t = T(); if (!t) return;
+  const pagos = JSON.parse(JSON.stringify(t.pagos||{}));
+  pagos[`${part}-${fi}`] = parseFloat(val)||0;
+  await fsUpdate(`torneos/${state.torneoActivo}`, { pagos });
+};
+
+// ─────────────────────────────────────────────────────────────
+// TAB — PREMIOS (solo admin)
+// ─────────────────────────────────────────────────────────────
+function renderTabPremios(el) {
+  const t = T(); if (!t) return;
+  const cfg = t.premiosCfg || {};
+  el.innerHTML = `
+    <div class="card" style="margin-top:4px">
+      <p style="font-size:13px;font-weight:500;margin-bottom:7px">Premio por fecha (pozo acumulado)</p>
+      <div class="row"><label class="lbl">Monto base:</label><input id="pfm" type="number" min="0" value="${cfg.montoFecha||0}"/><span style="font-size:12px;color:var(--color-text-secondary)">$/fecha</span></div>
+      <p style="font-size:11px;color:var(--color-text-secondary);margin-bottom:7px">Si nadie gana, el pozo pasa a la siguiente. En empate se divide.</p>
+      <div class="row"><label class="lbl">Condición:</label>
+        <select id="pcond">
+          <option value="max_puntos" ${cfg.condicion==='max_puntos'||!cfg.condicion?'selected':''}>Mayor puntaje en la fecha</option>
+          <option value="todos_aciertos" ${cfg.condicion==='todos_aciertos'?'selected':''}>Acertar todos los partidos</option>
+          <option value="min_errores" ${cfg.condicion==='min_errores'?'selected':''}>Menor cantidad de errores</option>
+        </select>
+      </div>
+    </div>
+    <div class="card">
+      <p style="font-size:13px;font-weight:500;margin-bottom:7px">Premio general</p>
+      <div class="row"><label class="lbl">1°:</label><input id="pm1" type="number" min="0" value="${cfg.premio1||0}"/><span style="font-size:12px;color:var(--color-text-secondary)">$</span></div>
+      <div class="row"><label class="lbl">2°:</label><input id="pm2" type="number" min="0" value="${cfg.premio2||0}"/><span style="font-size:12px;color:var(--color-text-secondary)">$</span></div>
+      <div class="row"><label class="lbl">3°:</label><input id="pm3" type="number" min="0" value="${cfg.premio3||0}"/><span style="font-size:12px;color:var(--color-text-secondary)">$</span></div>
+    </div>
+    <button class="btn btn-primary btn-sm" onclick="calcYGuardarPremios()">Guardar y calcular</button>
+    <div class="card" style="margin-top:8px"><p style="font-size:12px;font-weight:500;margin-bottom:6px">Resumen</p><div id="premios-resumen">${renderPremiosResumenHTML()}</div></div>`;
+}
+window.calcYGuardarPremios = async function() {
+  const cfg = {
+    montoFecha: parseFloat(document.getElementById('pfm').value)||0,
+    condicion: document.getElementById('pcond').value,
+    premio1: parseFloat(document.getElementById('pm1').value)||0,
+    premio2: parseFloat(document.getElementById('pm2').value)||0,
+    premio3: parseFloat(document.getElementById('pm3').value)||0,
+  };
+  await fsUpdate(`torneos/${state.torneoActivo}`, { premiosCfg: cfg });
+  document.getElementById('premios-resumen').innerHTML = renderPremiosResumenHTML();
+};
+
+function renderPremiosResumenHTML() {
+  const t = T(); if (!t) return '';
+  const meta = torneos().find(x=>x.id===state.torneoActivo)||{};
+  const cfg = t.premiosCfg || {};
+  const pozos = calcularPozos(t, meta, cfg);
+  let html = pozos.map(p => {
+    if (p.estado==='pendiente') return `<div class="pozo-row pozo-pendiente"><span>${p.nombre}</span><span style="font-size:11px">Sin resultados — pozo: $${p.pozoDeFecha.toLocaleString()}</span></div>`;
+    if (p.estado==='acumulado') return `<div class="pozo-row pozo-acum"><span>${p.nombre} — ACUMULADO</span><span style="font-size:11px">$${p.pozoDeFecha.toLocaleString()} pasa a la siguiente</span></div>`;
+    const emp = p.ganadores.length > 1 ? ` (÷${p.ganadores.length})` : '';
+    return `<div class="pozo-row pozo-ganado"><span>${p.nombre} — ${p.ganadores.join(' y ')}</span><span style="font-size:11px">$${p.pozoDeFecha.toLocaleString()}${emp} → $${Math.round(p.premioPorGanador).toLocaleString()} c/u</span></div>`;
+  }).join('') || '<p class="sub">Sin fechas.</p>';
+
+  const ranking = partsT().map(p=>({nombre:p,pts:totalPuntosGeneral(p,t,meta)})).sort((a,b)=>b.pts-a.pts);
+  if (ranking.length) {
+    html += '<table style="margin-top:8px"><thead><tr><th>Puesto</th><th>Participante</th><th>Puntos</th><th>Premio</th></tr></thead><tbody>';
+    ranking.forEach((r,i)=>{
+      const pr = i===0?cfg.premio1:i===1?cfg.premio2:i===2?cfg.premio3:0;
+      html += `<tr><td>${i+1}°</td><td>${r.nombre}</td><td>${r.pts}</td><td>${pr>0?'$'+(pr||0).toLocaleString():'-'}</td></tr>`;
+    });
+    html += '</tbody></table>';
+  }
+  return html;
+}
+
+// ─────────────────────────────────────────────────────────────
+// TAB — POSICIONES (todos)
+// ─────────────────────────────────────────────────────────────
+function renderTabPosiciones(el) {
+  const t = T(); if (!t) return;
+  const meta = torneos().find(x=>x.id===state.torneoActivo)||{};
+  const parts = partsT();
+  const ranking = parts.map(p=>({nombre:p,pts:totalPuntosGeneral(p,t,meta)})).sort((a,b)=>b.pts-a.pts);
+  const cuota = t.cuota || 500;
+  const totalRec = parts.reduce((s,p)=>s+((t.fechas||[]).reduce((ss,_,fi)=>ss+(t.pagos?.[`${p}-${fi}`]||0),0)),0);
+  const deudores = parts.filter(p=>(t.fechas||[]).some((_,fi)=>!estaAusente(fi,p)&&(t.pagos?.[`${p}-${fi}`]||0)<cuota)).length;
+
+  el.innerHTML = `
+    <div class="metrics-grid" style="margin-top:4px">
+      <div class="metric"><div class="metric-val">${parts.length}</div><div class="metric-lbl">Participantes</div></div>
+      <div class="metric"><div class="metric-val">${(t.fechas||[]).length}</div><div class="metric-lbl">Fechas</div></div>
+      ${state.rol==='admin'?`
+      <div class="metric"><div class="metric-val">$${totalRec.toLocaleString()}</div><div class="metric-lbl">Recaudado</div></div>
+      <div class="metric"><div class="metric-val">${deudores}</div><div class="metric-lbl">Con deuda</div></div>`:''}
+    </div>
+    ${ranking.length===0?'<p class="sub">Sin participantes asignados.</p>':`
+    <div style="overflow-x:auto"><table>
+      <thead><tr><th>#</th><th>Participante</th><th>Total</th>${(t.fechas||[]).map(f=>`<th style="white-space:nowrap">${f.nombre}</th>`).join('')}${state.rol==='admin'?'<th>Pagos</th>':''}</tr></thead>
+      <tbody>
+        ${ranking.map((r,i)=>{
+          const pagado = (t.fechas||[]).reduce((s,_,fi)=>s+(t.pagos?.[`${r.nombre}-${fi}`]||0),0);
+          const debe   = (t.fechas||[]).reduce((s,_,fi)=>s+(estaAusente(fi,r.nombre)?0:cuota),0);
+          const saldo  = pagado - debe;
+          const esMio  = r.nombre === state.nombreUsuario;
+          return `<tr ${esMio?'style="background:var(--color-background-info)"':''}>
+            <td>${i+1}</td>
+            <td style="font-weight:${i<3?'500':'400'};white-space:nowrap">${i===0?'🥇 ':i===1?'🥈 ':i===2?'🥉 ':''}${r.nombre}${esMio?' ⬅':''}
+            </td>
+            <td style="font-weight:500">${r.pts}</td>
+            ${(t.fechas||[]).map((_,fi)=>{
+              const tp  = totalPuntosFecha(fi,r.nombre,t,meta);
+              const aus = estaAusente(fi,r.nombre);
+              return `<td>${aus?'<span class="badge badge-gray">–</span>':tp!==null?tp:'?'}</td>`;
+            }).join('')}
+            ${state.rol==='admin'?`<td><span class="badge ${saldo>=0?'badge-green':'badge-red'}">${saldo>=0?'Al día':'Debe $'+Math.abs(saldo).toLocaleString()}</span></td>`:''}
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table></div>`}`;
+}
+
+// ─────────────────────────────────────────────────────────────
+// CÁLCULO DE PUNTOS
+// ─────────────────────────────────────────────────────────────
+function calcPuntos(fi, pi, part, t, meta) {
+  if (estaAusente(fi, part)) return null;
+  const resSigno = t.resultados?.[`${fi}-${pi}-signo`] || '';
+  if (!resSigno) return null;
+  if (meta.sistema === '1x2') {
+    const ps = t.pronosticos?.[`${fi}-${pi}-${part}-signo`] || '';
+    if (!ps) return null;
+    return ps === resSigno ? 1 : 0;
+  } else {
+    const pron = t.pronosticos?.[`${fi}-${pi}-${part}`] || {};
+    const res  = t.resultados?.[`${fi}-${pi}`] || {};
+    if (pron.gl === undefined || pron.gl === '') return null;
+    if (res.gl  === undefined || res.gl  === '') return null;
+    const ps = t.pronosticos?.[`${fi}-${pi}-${part}-signo`] || '';
+    if (parseInt(pron.gl)===parseInt(res.gl) && parseInt(pron.gv)===parseInt(res.gv)) return 3;
+    return ps === resSigno ? 1 : 0;
+  }
+}
+function totalPuntosFecha(fi, part, t, meta) {
+  if (!t || !meta) return null;
+  if (estaAusente(fi, part)) return null;
+  const f = (t.fechas||[])[fi]; if (!f) return null;
+  let total = 0, hay = false;
+  (f.partidos||[]).forEach((_,pi)=>{ const pts=calcPuntos(fi,pi,part,t,meta); if(pts!==null){hay=true;total+=pts;} });
+  return hay ? total : null;
+}
+function totalPuntosGeneral(part, t, meta) {
+  return (t.fechas||[]).reduce((s,_,fi)=>s+(totalPuntosFecha(fi,part,t,meta)||0), 0);
+}
+
+function calcularPozos(t, meta, cfg) {
+  const condicion = cfg.condicion || 'max_puntos';
+  const montoBase = cfg.montoFecha || 0;
+  let pozos = [], acumulado = 0;
+  (t.fechas||[]).forEach((f,fi)=>{
+    const pozoDeFecha = montoBase + acumulado;
+    const tieneRes = (f.partidos||[]).length > 0 && (f.partidos||[]).every((_,pi)=>!!t.resultados?.[`${fi}-${pi}-signo`]);
+    if (!tieneRes) { pozos.push({nombre:f.nombre,pozoDeFecha,ganadores:[],estado:'pendiente'}); return; }
+    const partsActivos = (t.participantes||[]).filter(p=>!estaAusente(fi,p));
+    const scores = partsActivos.map(part=>{
+      let pts=0,errores=0;
+      (f.partidos||[]).forEach((_,pi)=>{ const p=calcPuntos(fi,pi,part,t,meta); if(p!==null){pts+=p;if(p===0)errores++;} });
+      return {part,pts,errores};
+    });
+    if (!scores.length) { pozos.push({nombre:f.nombre,pozoDeFecha,ganadores:[],estado:'acumulado'}); acumulado+=montoBase; return; }
+    let ganadores = [];
+    if (condicion==='max_puntos') { const max=Math.max(...scores.map(s=>s.pts)); ganadores=scores.filter(s=>s.pts===max).map(s=>s.part); }
+    else if (condicion==='todos_aciertos') { ganadores=scores.filter(s=>s.errores===0).map(s=>s.part); }
+    else { const min=Math.min(...scores.map(s=>s.errores)); ganadores=scores.filter(s=>s.errores===min).map(s=>s.part); }
+    if (!ganadores.length) { pozos.push({nombre:f.nombre,pozoDeFecha,ganadores:[],estado:'acumulado'}); acumulado+=montoBase; }
+    else { pozos.push({nombre:f.nombre,pozoDeFecha,ganadores,estado:'ganado',premioPorGanador:pozoDeFecha/ganadores.length}); acumulado=0; }
+  });
+  return pozos;
+}
+
+// ─────────────────────────────────────────────────────────────
+// HELPERS
+// ─────────────────────────────────────────────────────────────
+function esc(s) { return s.replace(/'/g,"\\'"); }
+function renderChipsHTML(arr, fnName) {
+  return arr.map((v,i)=>`<span class="chip">${v}<span class="x" onclick="${fnName}(${i})">✕</span></span>`).join('');
+}
+</script>
+
+<style>
+:root {
+  --color-bg: #ffffff;
+  --color-bg2: #f5f5f5;
+  --color-border: #e0e0e0;
+  --color-text: #1a1a1a;
+  --color-text2: #666;
+  --color-text3: #999;
+  --color-info-bg: #eff6ff;
+  --color-info: #2563eb;
+  --color-info-border: #bfdbfe;
+  --color-success-bg: #f0fdf4;
+  --color-success: #16a34a;
+  --color-success-border: #bbf7d0;
+  --color-warn-bg: #fffbeb;
+  --color-warn: #d97706;
+  --color-warn-border: #fde68a;
+  --color-danger-bg: #fef2f2;
+  --color-danger: #dc2626;
+  --color-danger-border: #fecaca;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-bg: #1a1a1a;
+    --color-bg2: #252525;
+    --color-border: #333;
+    --color-text: #f0f0f0;
+    --color-text2: #aaa;
+    --color-text3: #666;
+    --color-info-bg: #1e3a5f;
+    --color-info: #60a5fa;
+    --color-info-border: #1d4ed8;
+    --color-success-bg: #14532d;
+    --color-success: #4ade80;
+    --color-success-border: #166534;
+    --color-warn-bg: #451a03;
+    --color-warn: #fbbf24;
+    --color-warn-border: #92400e;
+    --color-danger-bg: #450a0a;
+    --color-danger: #f87171;
+    --color-danger-border: #991b1b;
+  }
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;color:var(--color-text);background:var(--color-bg)}
+#app{height:100%}
+
+/* Login */
+.login-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--color-bg2);padding:16px}
+.login-card{background:var(--color-bg);border:1px solid var(--color-border);border-radius:12px;padding:32px;width:100%;max-width:360px}
+.login-logo{font-size:40px;text-align:center;margin-bottom:8px}
+.login-title{font-size:22px;font-weight:600;text-align:center;margin-bottom:4px}
+.login-sub{font-size:13px;color:var(--color-text2);text-align:center;margin-bottom:20px}
+.login-input{width:100%;padding:9px 12px;border:1px solid var(--color-border);border-radius:8px;font-size:14px;background:var(--color-bg);color:var(--color-text);margin-bottom:0}
+.login-input:focus{outline:none;border-color:var(--color-info)}
+.login-divider{text-align:center;color:var(--color-text3);font-size:12px;margin:14px 0;position:relative}
+.login-divider::before,.login-divider::after{content:'';position:absolute;top:50%;width:42%;height:1px;background:var(--color-border)}
+.login-divider::before{left:0}.login-divider::after{right:0}
+
+/* Layout */
+.layout{display:grid;grid-template-columns:200px 1fr;height:100vh;overflow:hidden}
+@media(max-width:600px){.layout{grid-template-columns:1fr;grid-template-rows:auto 1fr}}
+.sidebar{border-right:1px solid var(--color-border);padding:10px 8px;overflow-y:auto;display:flex;flex-direction:column;gap:2px;background:var(--color-bg2)}
+.sidebar-header{display:flex;align-items:center;gap:8px;padding:8px 6px 12px;border-bottom:1px solid var(--color-border);margin-bottom:6px}
+.sidebar-logo{font-size:22px}
+.sidebar-section{font-size:10px;color:var(--color-text3);padding:8px 6px 3px;text-transform:uppercase;letter-spacing:.06em}
+.nav-item{padding:7px 10px;border-radius:8px;cursor:pointer;font-size:13px;color:var(--color-text2);display:flex;justify-content:space-between;align-items:center;gap:6px}
+.nav-item:hover{background:var(--color-border)}
+.nav-item.active{background:var(--color-info-bg);color:var(--color-info);font-weight:500}
+.btn-primary-soft{background:var(--color-info-bg);color:var(--color-info);border:1px solid var(--color-info-border);border-radius:8px;padding:6px 10px;cursor:pointer;font-size:12px;text-align:center}
+.btn-primary-soft:hover{opacity:.85}
+.t-badge{font-size:10px;padding:1px 6px;border-radius:8px;background:var(--color-border);color:var(--color-text3);white-space:nowrap}
+.nav-item.active .t-badge{background:var(--color-info-border);color:var(--color-info)}
+.content{overflow-y:auto;padding:16px}
+.empty-state{padding:40px;text-align:center;color:var(--color-text3);font-size:13px}
+
+/* Tabs */
+.tabs{display:flex;gap:3px;margin-bottom:12px;border-bottom:1px solid var(--color-border);overflow-x:auto}
+.tab{padding:6px 12px;border:1px solid transparent;border-radius:6px 6px 0 0;cursor:pointer;white-space:nowrap;color:var(--color-text2);font-size:12px}
+.tab.active{border-color:var(--color-border);border-bottom-color:var(--color-bg);background:var(--color-bg);color:var(--color-text);font-weight:500}
+
+/* Botones */
+.btn{padding:6px 14px;border:1px solid var(--color-border);border-radius:8px;cursor:pointer;font-size:13px;background:var(--color-bg);color:var(--color-text);white-space:nowrap}
+.btn:hover{background:var(--color-bg2)}
+.btn-sm{padding:4px 10px;font-size:12px}
+.btn-primary{background:var(--color-info);color:#fff;border-color:var(--color-info)}
+.btn-primary:hover{opacity:.85}
+.btn-danger{color:var(--color-danger);border-color:var(--color-danger-border)}
+.btn-danger:hover{background:var(--color-danger-bg)}
+
+/* Formularios */
+input,select{border:1px solid var(--color-border);border-radius:8px;padding:6px 10px;font-size:13px;background:var(--color-bg);color:var(--color-text);flex:1;min-width:0;width:100%}
+input:focus,select:focus{outline:none;border-color:var(--color-info);box-shadow:0 0 0 3px var(--color-info-bg)}
+.row{display:flex;gap:7px;margin-bottom:7px;align-items:center}
+.lbl{font-size:12px;white-space:nowrap;min-width:65px;color:var(--color-text2)}
+
+/* Chips */
+.chip{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border:1px solid var(--color-border);border-radius:20px;font-size:12px;margin:2px}
+.chip .x{cursor:pointer;color:var(--color-text3);font-size:11px}.chip .x:hover{color:var(--color-danger)}
+.chips{display:flex;flex-wrap:wrap;margin-bottom:8px}
+
+/* Cards */
+.card{background:var(--color-bg);border:1px solid var(--color-border);border-radius:10px;padding:14px;margin-bottom:10px}
+
+/* Badges */
+.badge{display:inline-block;padding:2px 7px;border-radius:10px;font-size:11px;font-weight:500}
+.badge-green{background:var(--color-success-bg);color:var(--color-success)}
+.badge-amber{background:var(--color-warn-bg);color:var(--color-warn)}
+.badge-red{background:var(--color-danger-bg);color:var(--color-danger)}
+.badge-gray{background:var(--color-bg2);color:var(--color-text3)}
+
+.sub{color:var(--color-text2);font-size:12px;margin-bottom:8px}
+.section-title{font-size:15px;font-weight:500;margin-bottom:8px}
+
+/* Tabla */
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{text-align:left;padding:6px 8px;border-bottom:1px solid var(--color-border);font-weight:500;color:var(--color-text2);font-size:11px}
+td{padding:6px 8px;border-bottom:1px solid var(--color-border)}
+
+/* Métricas */
+.metrics-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(90px,1fr));gap:6px;margin-bottom:12px}
+.metric{background:var(--color-bg2);border-radius:8px;padding:8px 12px;text-align:center}
+.metric-val{font-size:18px;font-weight:500}
+.metric-lbl{font-size:10px;color:var(--color-text2);margin-top:1px}
+
+/* Pronósticos */
+.partido-block{border:1px solid var(--color-border);border-radius:8px;padding:8px;margin-bottom:6px}
+.partido-header{display:grid;grid-template-columns:1fr 24px 1fr;gap:4px;align-items:center;margin-bottom:7px}
+.team-name{font-size:12px;font-weight:500;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vs-label{font-size:10px;color:var(--color-text3);text-align:center}
+.signos{display:flex;gap:6px;justify-content:center}
+.signo-btn{
+  width:38px;height:32px;
+  border:2px solid var(--color-border);
+  border-radius:8px;cursor:pointer;
+  font-size:14px;font-weight:700;
+  background:var(--color-bg2);
+  color:var(--color-text3);
+  transition:all .1s;
+}
+.signo-btn:hover{background:var(--color-border)}
+/* clases de estado fijas — no dependen de JS */
+.signo-btn.sel-1{background:var(--color-info-bg);color:var(--color-info);border-color:var(--color-info)!important}
+.signo-btn.sel-X{background:var(--color-warn-bg);color:var(--color-warn);border-color:var(--color-warn)!important}
+.signo-btn.sel-2{background:var(--color-danger-bg);color:var(--color-danger);border-color:var(--color-danger)!important}
+.score-wrap{display:flex;gap:4px;justify-content:center;align-items:center}
+.score-inp{width:40px;text-align:center;padding:4px;font-size:14px;font-weight:500;flex:none}
+
+/* Participantes torneo */
+.part-check-row{display:flex;align-items:center;justify-content:space-between;padding:7px 10px;border-radius:8px;border:1px solid var(--color-border);margin-bottom:5px}
+.part-check-row.assigned{border-color:var(--color-info-border);background:var(--color-info-bg)}
+
+/* Ausencias */
+.ausencia-toggle{padding:3px 9px;border-radius:10px;font-size:11px;border:1px solid var(--color-border);cursor:pointer;background:var(--color-bg2);color:var(--color-text2)}
+.ausencia-toggle.ausente{background:var(--color-warn-bg);color:var(--color-warn);border-color:var(--color-warn-border)}
+
+/* Pozos */
+.pozo-row{display:flex;justify-content:space-between;align-items:center;padding:6px 10px;border-radius:8px;margin-bottom:5px;font-size:12px;gap:8px}
+.pozo-acum{background:var(--color-warn-bg);border:1px solid var(--color-warn-border);color:var(--color-warn)}
+.pozo-ganado{background:var(--color-success-bg);border:1px solid var(--color-success-border);color:var(--color-success)}
+.pozo-pendiente{background:var(--color-bg2);border:1px solid var(--color-border);color:var(--color-text2)}
+</style>
+<body><div id="app"></div></body>
+</html>
