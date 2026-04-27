@@ -350,9 +350,20 @@ window.crearTorneo=async function(){
   S.torneoActivo=id;renderShell();setTimeout(()=>selectTorneo(id),400);
 };
 window.eliminarTorneo=async function(){
-  if(!confirm('¿Eliminar este torneo?'))return;
-  const id=S.torneoActivo;await fset('config/global',{torneos:torneos().filter(t=>t.id!==id)});
-  S.torneoActivo=null;document.getElementById('content').innerHTML='<div class="empty-state">Seleccioná un torneo</div>';
+  if(!confirm('¿Eliminar este torneo y todos sus datos?'))return;
+  const id=S.torneoActivo;
+  if(!id){alert('Error: no se puede identificar el torneo.');return;}
+  const nuevos=torneos().filter(t=>t.id&&t.id!==id);
+  await fset('config/global',{torneos:nuevos});
+  S.torneoActivo=null;
+  S.data.torneos={};
+  renderTorneosNav();
+  document.getElementById('content').innerHTML='<div class="empty-state">Seleccioná un torneo</div>';
+};
+window.limpiarTorneosInvalidos=async function(){
+  const validos=torneos().filter(t=>t.id&&t.nombre);
+  await fset('config/global',{torneos:validos});
+  alert('Limpieza completada. Torneos válidos: '+validos.length);
 };
 
 // ── TAB PARTICIPANTES TORNEO ─────────────────────────────────
@@ -575,36 +586,153 @@ window.toggleAus=async function(fi,uid){const t=T();if(!t)return;const aus=JSON.
 
 // ── TAB PAGOS ────────────────────────────────────────────────
 function cuotaFecha(fi){const t=T();if(!t)return 0;return t.cuotasFecha?.[fi]??t.cuota??500;}
+
+// ── PAGOS: resumen + detalle de movimientos ──────────────────
+// pagosDetalle: { "uid-fi": [{monto, fecha, nota}] }
+function totalPagadoDetalle(uid,fi,t){
+  const movs=t.pagosDetalle?.[`${uid}-${fi}`]||[];
+  return movs.reduce((s,m)=>s+m.monto,0);
+}
+
 function rtPagos(el){
   const t=T();if(!t)return;const uids=partsT();const fechas=t.fechas||[];
   if(!uids.length||!fechas.length){el.innerHTML='<p class="sub" style="margin-top:4px">Configurá fechas y participantes primero.</p>';return;}
   const cuotaBase=t.cuota||500;
-  // Encabezado con cuota editable por fecha
-  const headerCuotas=fechas.map((f,fi)=>`<th><div style="font-size:11px;font-weight:500">${f.nombre}</div><div style="display:flex;gap:3px;align-items:center;margin-top:3px"><span style="font-size:10px;color:var(--c-text2)">$</span><input type="number" min="0" step="100" value="${cuotaFecha(fi)}" style="width:58px;padding:2px 4px;font-size:11px;border:1px solid var(--c-border);border-radius:5px;background:var(--c-bg2);color:var(--c-text)" onchange="saveCuotaFecha(${fi},this.value)" title="Cuota para ${f.nombre}"/></div></th>`).join('');
-  el.innerHTML=`<div class="row" style="margin-top:4px">
+  const vista=el.dataset.vista||'resumen';
+
+  // Tabs de vista
+  const tabs=`<div style="display:flex;gap:6px;margin-bottom:12px">
+    <button class="btn btn-sm ${vista==='resumen'?'btn-primary':''}" onclick="setPagosVista('resumen')">📊 Resumen</button>
+    <button class="btn btn-sm ${vista==='detalle'?'btn-primary':''}" onclick="setPagosVista('detalle')">📋 Detalle de pagos</button>
+  </div>`;
+
+  // Config cuota base
+  const cfgCuota=`<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
     <label style="font-size:12px;white-space:nowrap">Cuota base:</label>
-    <input id="cuota-monto" type="number" min="0" step="100" value="${cuotaBase}" style="max-width:80px" onchange="saveCuota(this.value)"/>
-    <span style="font-size:12px;color:var(--c-text2)">$ (aplica a fechas sin cuota propia)</span>
-  </div>
-  <p class="sub">Podés editar la cuota de cada fecha individualmente en el encabezado de la tabla.</p>
-  <div style="overflow-x:auto"><table>
-    <thead><tr><th>Participante</th>${headerCuotas}<th>Debe</th><th>Pagado</th><th>Saldo</th></tr></thead>
-    <tbody>${uids.map(uid=>{
+    <input id="cuota-monto" type="number" min="0" step="100" value="${cuotaBase}" style="max-width:80px" onblur="saveCuota(this.value)"/>
+    <span style="font-size:12px;color:var(--c-text2)">$ por fecha (editable por fecha en el encabezado)</span>
+  </div>`;
+
+  if(vista==='resumen'){
+    const headerCuotas=fechas.map((f,fi)=>`<th><div style="font-size:11px;font-weight:500">${f.nombre}</div><div style="display:flex;gap:2px;align-items:center;margin-top:3px"><span style="font-size:10px;color:var(--c-text2)">$</span><input type="number" min="0" step="100" value="${cuotaFecha(fi)}" style="width:55px;padding:2px 4px;font-size:11px;border:1px solid var(--c-border);border-radius:5px;background:var(--c-bg2);color:var(--c-text)" onblur="saveCuotaFecha(${fi},this.value)"/></div></th>`).join('');
+    const filas=uids.map(uid=>{
       const p=allParts()[uid]||{};const nombre=p.nombre?`${p.nombre} ${p.apellido}`:uid;
       let debe=0,pagado=0;
       const celdas=fechas.map((_,fi)=>{
-        const aus=ausente(fi,uid);const pago=t.pagos?.[`${uid}-${fi}`]||0;
-        const cf=cuotaFecha(fi);
+        const aus=ausente(fi,uid);const cf=cuotaFecha(fi);
+        const movs=t.pagosDetalle?.[`${uid}-${fi}`]||[];
+        const pago=movs.reduce((s,m)=>s+m.monto,0);
         if(!aus)debe+=cf;pagado+=pago;
         if(aus)return`<td><span class="badge badge-gray">No juega</span></td>`;
         const diff=pago-cf;
-        return`<td><div style="display:flex;gap:3px;align-items:center"><input type="number" min="0" step="100" value="${pago}" style="width:62px;padding:3px 5px;font-size:12px;border:1px solid var(--c-border);border-radius:6px;background:var(--c-bg);color:var(--c-text)" onchange="savePago('${uid}',${fi},this.value)"/>${diff===0?'<span class="badge badge-green">OK</span>':diff>0?`<span class="badge badge-amber">+${diff}</span>`:`<span class="badge badge-red">${diff}</span>`}</div></td>`;
+        return`<td style="text-align:center">
+          <div style="font-size:13px;font-weight:500">$${pago.toLocaleString()}</div>
+          <div>${diff===0?'<span class="badge badge-green">OK</span>':diff>0?`<span class="badge badge-amber">+$${diff.toLocaleString()}</span>`:`<span class="badge badge-red">-$${Math.abs(diff).toLocaleString()}</span>`}</div>
+          <button onclick="abrirDetallePago('${uid}',${fi})" style="font-size:10px;color:var(--c-info);background:none;border:none;cursor:pointer;padding:2px">+ agregar pago</button>
+        </td>`;
       }).join('');
       const saldo=pagado-debe;
       return`<tr><td style="font-weight:500;white-space:nowrap">${nombre}</td>${celdas}<td>$${debe.toLocaleString()}</td><td>$${pagado.toLocaleString()}</td><td><span class="badge ${saldo>=0?'badge-green':'badge-red'}">${saldo>=0?'+':''}$${saldo.toLocaleString()}</span></td></tr>`;
-    }).join('')}</tbody>
-  </table></div>`;
+    }).join('');
+    el.innerHTML=tabs+cfgCuota+`<div style="overflow-x:auto"><table>
+      <thead><tr><th>Participante</th>${headerCuotas}<th>Debe</th><th>Pagado</th><th>Saldo</th></tr></thead>
+      <tbody>${filas}</tbody>
+    </table></div>
+    <div id="modal-pago" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:999;display:none;align-items:center;justify-content:center"></div>`;
+
+  } else {
+    // Vista detalle: por participante, lista de movimientos
+    const filas=uids.map(uid=>{
+      const p=allParts()[uid]||{};const nombre=p.nombre?`${p.nombre} ${p.apellido}`:uid;
+      let totalDebe=0,totalPag=0;
+      const bloques=fechas.map((f,fi)=>{
+        const aus=ausente(fi,uid);const cf=cuotaFecha(fi);
+        if(!aus)totalDebe+=cf;
+        if(aus)return``;
+        const movs=t.pagosDetalle?.[`${uid}-${fi}`]||[];
+        const sumMovs=movs.reduce((s,m)=>s+m.monto,0);totalPag+=sumMovs;
+        const diff=sumMovs-cf;
+        return`<div style="margin-bottom:8px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+            <span style="font-size:12px;font-weight:500">${f.nombre} <span style="color:var(--c-text2);font-weight:400">(cuota: $${cf.toLocaleString()})</span></span>
+            <div style="display:flex;align-items:center;gap:6px">
+              <span style="font-size:12px">Total: <strong>$${sumMovs.toLocaleString()}</strong></span>
+              ${diff===0?'<span class="badge badge-green">OK</span>':diff>0?`<span class="badge badge-amber">+$${diff.toLocaleString()}</span>`:`<span class="badge badge-red">-$${Math.abs(diff).toLocaleString()}</span>`}
+              <button class="btn btn-sm btn-primary" onclick="abrirDetallePago('${uid}',${fi})">+ Pago</button>
+            </div>
+          </div>
+          ${movs.length?`<table style="width:100%;font-size:11px"><thead><tr><th>Fecha pago</th><th>Monto</th><th>Nota</th><th></th></tr></thead><tbody>
+            ${movs.map((m,mi)=>`<tr><td>${m.fecha||'-'}</td><td>$${m.monto.toLocaleString()}</td><td style="color:var(--c-text2)">${m.nota||''}</td><td><button onclick="eliminarMovPago('${uid}',${fi},${mi})" style="background:none;border:none;cursor:pointer;color:var(--c-danger);font-size:12px">✕</button></td></tr>`).join('')}
+          </tbody></table>`:`<p style="font-size:11px;color:var(--c-text2)">Sin pagos registrados</p>`}
+        </div>`;
+      }).join('');
+      const saldo=totalPag-totalDebe;
+      return`<div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:6px">
+          <span style="font-weight:500;font-size:13px">${nombre}</span>
+          <span class="badge ${saldo>=0?'badge-green':'badge-red'}">${saldo>=0?'Saldo a favor $'+saldo.toLocaleString():'Debe $'+Math.abs(saldo).toLocaleString()}</span>
+        </div>
+        ${bloques}
+      </div>`;
+    }).join('');
+    el.innerHTML=tabs+cfgCuota+filas+`<div id="modal-pago" style="display:none"></div>`;
+  }
+  el.dataset.vista=vista;
 }
+
+window.setPagosVista=function(vista){
+  const el=document.getElementById('tab-content');if(!el)return;
+  el.dataset.vista=vista;renderTab('pagos');
+};
+
+window.abrirDetallePago=function(uid,fi){
+  const t=T();if(!t)return;
+  const p=allParts()[uid]||{};const f=(t.fechas||[])[fi]||{};
+  const nombre=p.nombre?`${p.nombre} ${p.apellido}`:uid;
+  const modal=document.getElementById('modal-pago');if(!modal)return;
+  const hoy=new Date().toISOString().split('T')[0];
+  modal.style.display='flex';
+  modal.style.alignItems='center';
+  modal.style.justifyContent='center';
+  modal.innerHTML=`<div style="background:var(--c-bg);border-radius:12px;padding:24px;width:100%;max-width:360px;box-shadow:0 8px 32px rgba(0,0,0,.2)">
+    <p style="font-weight:500;font-size:14px;margin-bottom:12px">Registrar pago — ${nombre} / ${f.nombre}</p>
+    <div class="row"><label class="lbl">Monto:</label><input id="mov-monto" type="number" min="0" step="100" placeholder="$" value="${cuotaFecha(fi)}"/></div>
+    <div class="row"><label class="lbl">Fecha:</label><input id="mov-fecha" type="date" value="${hoy}"/></div>
+    <div class="row"><label class="lbl">Nota:</label><input id="mov-nota" placeholder="Opcional..."/></div>
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <button class="btn btn-primary btn-sm" onclick="guardarMovPago('${uid}',${fi})">Guardar</button>
+      <button class="btn btn-sm" onclick="cerrarModalPago()">Cancelar</button>
+    </div>
+  </div>`;
+};
+
+window.cerrarModalPago=function(){
+  const m=document.getElementById('modal-pago');if(m)m.style.display='none';
+};
+
+window.guardarMovPago=async function(uid,fi){
+  const monto=parseFloat(document.getElementById('mov-monto').value)||0;
+  const fecha=document.getElementById('mov-fecha').value;
+  const nota=document.getElementById('mov-nota').value.trim();
+  if(!monto)return;
+  const t=T();if(!t)return;
+  const det=JSON.parse(JSON.stringify(t.pagosDetalle||{}));
+  const key=`${uid}-${fi}`;
+  if(!det[key])det[key]=[];
+  det[key].push({monto,fecha,nota});
+  await fupd(`torneos/${S.torneoActivo}`,{pagosDetalle:det});
+  cerrarModalPago();
+};
+
+window.eliminarMovPago=async function(uid,fi,mi){
+  if(!confirm('¿Eliminar este pago?'))return;
+  const t=T();if(!t)return;
+  const det=JSON.parse(JSON.stringify(t.pagosDetalle||{}));
+  const key=`${uid}-${fi}`;
+  if(det[key])det[key].splice(mi,1);
+  await fupd(`torneos/${S.torneoActivo}`,{pagosDetalle:det});
+};
+
 window.saveCuota=async function(val){await fupd(`torneos/${S.torneoActivo}`,{cuota:parseFloat(val)||500});};
 window.saveCuotaFecha=async function(fi,val){
   const t=T();if(!t)return;
@@ -656,8 +784,8 @@ function rtPos(el){
   const uids=partsT();const isAdmin=S.rol==='admin';
   const ranking=uids.map(uid=>({uid,nombre:nombrePart(uid),pts:totalG(uid,t,m)})).sort((a,b)=>b.pts-a.pts);
   const cuota=t.cuota||500;
-  const totalRec=uids.reduce((s,uid)=>(t.fechas||[]).reduce((ss,_,fi)=>ss+(t.pagos?.[`${uid}-${fi}`]||0),s),0);
-  const deudores=uids.filter(uid=>(t.fechas||[]).some((_,fi)=>!ausente(fi,uid)&&(t.pagos?.[`${uid}-${fi}`]||0)<(t.cuotasFecha?.[fi]??cuota))).length;
+  const totalRec=uids.reduce((s,uid)=>(t.fechas||[]).reduce((ss,_,fi)=>ss+((t.pagosDetalle?.[`${uid}-${fi}`]||[]).reduce((sm,m)=>sm+m.monto,0)),s),0);
+  const deudores=uids.filter(uid=>(t.fechas||[]).some((_,fi)=>!ausente(fi,uid)&&((t.pagosDetalle?.[`${uid}-${fi}`]||[]).reduce((s,m)=>s+m.monto,0))<(t.cuotasFecha?.[fi]??cuota))).length;
   el.innerHTML=`<div class="metrics-grid" style="margin-top:4px">
     <div class="metric"><div class="metric-val">${uids.length}</div><div class="metric-lbl">Participantes</div></div>
     <div class="metric"><div class="metric-val">${(t.fechas||[]).length}</div><div class="metric-lbl">Fechas</div></div>
@@ -666,7 +794,7 @@ function rtPos(el){
   ${!ranking.length?'<p class="sub">Sin participantes.</p>':`<div style="overflow-x:auto"><table>
     <thead><tr><th>#</th><th>Participante</th><th>Total</th>${(t.fechas||[]).map(f=>`<th style="white-space:nowrap">${f.nombre}</th>`).join('')}${isAdmin?'<th>Pagos</th>':''}</tr></thead>
     <tbody>${ranking.map((r,i)=>{
-      const pagado=(t.fechas||[]).reduce((s,_,fi)=>s+(t.pagos?.[`${r.uid}-${fi}`]||0),0);
+      const pagado=(t.fechas||[]).reduce((s,_,fi)=>s+((t.pagosDetalle?.[`${r.uid}-${fi}`]||[]).reduce((ss,m)=>ss+m.monto,0)),0);
       const debe=(t.fechas||[]).reduce((s,_,fi)=>s+(ausente(fi,r.uid)?0:(t.cuotasFecha?.[fi]??cuota)),0);
       const saldo=pagado-debe;const esMio=r.uid===S.uid;
       return`<tr ${esMio?'style="background:var(--c-info-bg)"':''}>
