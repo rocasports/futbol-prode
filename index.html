@@ -6,7 +6,7 @@
 <title>Prode Fútbol</title>
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getFirestore, doc, collection, getDoc, getDocs, setDoc, updateDoc, onSnapshot, deleteField }
+import { getFirestore, doc, collection, getDoc, setDoc, updateDoc, onSnapshot }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import {
   getAuth, onAuthStateChanged, signOut,
@@ -34,7 +34,7 @@ const app  = initializeApp(firebaseConfig);
 const db   = getFirestore(app);
 const auth = getAuth(app);
 
-// ── Estado ───────────────────────────────────────────────────
+// ── Estado global ────────────────────────────────────────────
 let S = {
   uid: null, rol: null, perfil: null,
   torneoActivo: null,
@@ -42,99 +42,139 @@ let S = {
 };
 let unsubs = [];
 
-// ── Helpers Firestore ────────────────────────────────────────
+// ── Firestore helpers ────────────────────────────────────────
 function dref(path) {
   const p = path.split('/');
   let r = null;
-  p.forEach((s,i) => r = i%2===0 ? (r ? collection(r,s) : collection(db,s)) : doc(r,s));
+  p.forEach((s,i) => r = i%2===0 ? (r?collection(r,s):collection(db,s)) : doc(r,s));
   return r;
 }
-async function fget(path)       { const s=await getDoc(dref(path)); return s.exists()?s.data():null; }
-async function fset(path, data) { await setDoc(dref(path), data, {merge:true}); }
-async function fupd(path, data) { try{ await updateDoc(dref(path), data); } catch(e){ await setDoc(dref(path), data, {merge:true}); } }
-function flisten(path, cb)      { const u=onSnapshot(dref(path), s=>cb(s.exists()?s.data():null)); unsubs.push(u); return u; }
-function stopAll()              { unsubs.forEach(u=>u()); unsubs=[]; }
+async function fget(path) { const s=await getDoc(dref(path)); return s.exists()?s.data():null; }
+async function fset(path,data) { await setDoc(dref(path),data,{merge:true}); }
+async function fupd(path,data) { try{await updateDoc(dref(path),data);}catch(e){await setDoc(dref(path),data,{merge:true});} }
+function flisten(path,cb) { const u=onSnapshot(dref(path),s=>cb(s.exists()?s.data():null)); unsubs.push(u); return u; }
+function stopAll() { unsubs.forEach(u=>u()); unsubs=[]; }
 
-// ── Accesores de estado ──────────────────────────────────────
+// ── Accesores ────────────────────────────────────────────────
 function cfg()      { return S.data.config; }
-function allParts() { return cfg().participantes || {}; } // {uid: {nombre,apellido,...}}
-function torneos()  { return cfg().torneos || []; }
-function T()        { return S.torneoActivo ? S.data.torneos[S.torneoActivo] : null; }
-function partsT()   { return T()?.participantes || []; } // array de uids
+function admins()   { return cfg().admins||[]; }
+function allParts() { return cfg().participantes||{}; }
+function torneos()  { return cfg().torneos||[]; }
+function T()        { return S.torneoActivo?S.data.torneos[S.torneoActivo]:null; }
+function partsT()   { return T()?.participantes||[]; }
 function ausente(fi,uid) { return !!(T()?.ausencias?.[`${fi}-${uid}`]); }
 function meta()     { return torneos().find(x=>x.id===S.torneoActivo)||{}; }
 function nombrePart(uid) {
-  const p = allParts()[uid];
-  return p ? `${p.nombre} ${p.apellido}` : uid;
+  const p=allParts()[uid];
+  return p?`${p.nombre} ${p.apellido}`:uid;
 }
 
 // ─────────────────────────────────────────────────────────────
-// AUTH
+// BOOT
 // ─────────────────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', () => {
-  // Completar magic link si viene de email
+  // Magic link callback
   if (isSignInWithEmailLink(auth, window.location.href)) {
     let email = localStorage.getItem('emailForSignIn');
-    if (!email) email = prompt('Confirmá tu email para entrar:');
+    if (!email) email = prompt('Confirmá tu email:');
     signInWithEmailLink(auth, email, window.location.href)
-      .then(() => localStorage.removeItem('emailForSignIn'))
-      .catch(e => { showApp('<div class="login-wrap"><div class="login-card"><p style="color:red">Error al verificar link: '+e.message+'</p><button class="btn btn-primary" onclick="location.href=APP_URL">Volver</button></div></div>'); });
+      .then(()=>{ localStorage.removeItem('emailForSignIn'); history.replaceState(null,'',APP_URL); })
+      .catch(e=>setApp(`<div class="login-wrap"><div class="login-card"><p style="color:var(--c-danger)">Error: ${e.message}</p><button class="btn btn-primary" onclick="location.href='${APP_URL}'">Volver</button></div></div>`));
     return;
   }
-  renderLogin();
+
+  setApp(loadingHTML());
+
   onAuthStateChanged(auth, async user => {
-    if (user) {
-      S.uid = user.uid;
-      await initSession();
-    } else {
-      stopAll();
-      S = { uid:null, rol:null, perfil:null, torneoActivo:null, data:{config:{},torneos:{}} };
-      renderLogin();
-    }
+    stopAll();
+    if (!user) { S={uid:null,rol:null,perfil:null,torneoActivo:null,data:{config:{},torneos:{}}}; renderLogin(); return; }
+    S.uid = user.uid;
+    await handleUserLogin(user);
   });
 });
 
-async function initSession() {
-  // Cargar config global
-  const globalCfg = await fget('config/global') || { participantes:{}, torneos:[], admins:[] };
-  S.data.config = globalCfg;
+async function handleUserLogin(user) {
+  setApp(loadingHTML('Verificando acceso...'));
 
-  // Determinar rol
-  const admins = globalCfg.admins || [];
-  S.rol = admins.includes(S.uid) ? 'admin' : 'participante';
+  // Cargar o inicializar config global
+  let cfgData = await fget('config/global');
+  if (!cfgData) {
+    cfgData = { admins:[], participantes:{}, torneos:[] };
+    await fset('config/global', cfgData);
+  }
+  S.data.config = cfgData;
 
-  // Verificar si el participante está registrado
-  const parts = globalCfg.participantes || {};
-  S.perfil = parts[S.uid] || null;
+  const email = user.email;
+  const parts = cfgData.participantes||{};
+  const isAdmin = (cfgData.admins||[]).includes(user.uid);
 
-  if (S.rol === 'participante' && !parts[S.uid]) {
-    // No registrado — mostrar pantalla de perfil pendiente
-    renderPerfilPendiente();
+  // Buscar participante pendiente de login (cargado por admin con ese mail)
+  const pendingLogin = Object.entries(parts).find(([,p])=>p.estado==='pendiente_login'&&p.mail===email);
+
+  if (pendingLogin) {
+    // Vincular: mover de tempId a uid real
+    const [tempId, perfil] = pendingLogin;
+    const newParts = {...parts};
+    delete newParts[tempId];
+    newParts[user.uid] = {...perfil, uid:user.uid, estado:'activo'};
+    // Migrar en torneos
+    const ts = cfgData.torneos||[];
+    for (const t of ts) {
+      const td = await fget(`torneos/${t.id}`);
+      if (td && (td.participantes||[]).includes(tempId)) {
+        await fupd(`torneos/${t.id}`, {participantes: td.participantes.map(u=>u===tempId?user.uid:u)});
+      }
+    }
+    await fset('config/global', {participantes: newParts});
+    S.data.config.participantes = newParts;
+  }
+
+  // Re-leer participante
+  const myPart = S.data.config.participantes[user.uid];
+  S.perfil = myPart || null;
+  S.rol = isAdmin ? 'admin' : 'participante';
+
+  if (isAdmin) {
+    // Admin entra directo
+    await startApp();
     return;
   }
 
-  if (S.rol === 'participante' && parts[S.uid] && !perfilCompleto(parts[S.uid])) {
-    renderCompletarPerfil(parts[S.uid]);
+  if (!myPart) {
+    // Desconocido — auto-registro
+    renderAutoRegistro(user);
     return;
   }
 
-  await startApp();
-}
+  if (myPart.estado === 'pendiente_aprobacion') {
+    renderEsperaAprobacion(myPart);
+    return;
+  }
 
-function perfilCompleto(p) {
-  return p && p.nombre && p.apellido && p.dni && p.cel && p.mail;
+  if (myPart.estado === 'rechazado') {
+    renderRechazado();
+    return;
+  }
+
+  if (myPart.estado === 'activo') {
+    await startApp();
+    return;
+  }
+
+  // Fallback
+  renderEsperaAprobacion(myPart);
 }
 
 async function startApp() {
   renderShell();
-  // Suscribirse a config global en tiempo real
   flisten('config/global', data => {
-    S.data.config = data || { participantes:{}, torneos:[], admins:[] };
-    S.perfil = (data?.participantes||{})[S.uid] || null;
+    S.data.config = data||{admins:[],participantes:{},torneos:[]};
+    S.perfil = (data?.participantes||{})[S.uid]||null;
     renderTorneosNav();
     suscribirTorneos();
-    // Refrescar vista actual
     if (S.torneoActivo) refreshTorneoView();
+    // Si admin ve pendientes, refrescar badge
+    actualizarBadgePendientes();
   });
 }
 
@@ -143,114 +183,120 @@ function suscribirTorneos() {
     if (!S.data.torneos[t.id]) {
       S.data.torneos[t.id] = {};
       flisten(`torneos/${t.id}`, data => {
-        S.data.torneos[t.id] = data || {};
-        if (S.torneoActivo === t.id) refreshTorneoView();
+        S.data.torneos[t.id] = data||{};
+        if (S.torneoActivo===t.id) refreshTorneoView();
       });
     }
   });
 }
 
 // ─────────────────────────────────────────────────────────────
-// PANTALLAS DE AUTH
+// PANTALLAS PRE-APP
 // ─────────────────────────────────────────────────────────────
 function renderLogin() {
-  document.getElementById('app').innerHTML = `
+  setApp(`
     <div class="login-wrap">
       <div class="login-card">
         <div class="login-logo">⚽</div>
         <h1 class="login-title">Prode Fútbol</h1>
-        <p class="login-sub">Ingresá para ver tus pronósticos</p>
-
+        <p class="login-sub">Ingresá para participar</p>
         <button class="btn-google" onclick="loginGoogle()">
           <svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 6.29C4.672 4.163 6.656 3.58 9 3.58z"/></svg>
           Entrar con Google
         </button>
-
-        <div class="login-divider">o ingresá con tu mail</div>
-
-        <input id="login-mail" class="login-input" type="email" placeholder="tu@mail.com"/>
+        <div class="login-divider">o con tu mail</div>
+        <input id="login-mail" class="login-input" type="email" placeholder="tu@mail.com" onkeydown="if(event.key==='Enter')loginMagicLink()"/>
         <button class="btn btn-primary" style="width:100%;margin-top:8px" onclick="loginMagicLink()">Enviar link de acceso</button>
-        <p id="login-msg" style="font-size:12px;margin-top:10px;text-align:center;display:none"></p>
+        <p id="login-msg" style="font-size:12px;margin-top:10px;text-align:center;min-height:18px"></p>
       </div>
-    </div>`;
+    </div>`);
 }
 
+function renderAutoRegistro(user) {
+  setApp(`
+    <div class="login-wrap">
+      <div class="login-card" style="max-width:420px">
+        <div class="login-logo">📝</div>
+        <h1 class="login-title" style="font-size:18px">Completá tu registro</h1>
+        <p class="login-sub">Ingresá tus datos. El administrador deberá aprobar tu cuenta.</p>
+        <div style="display:flex;flex-direction:column;gap:8px;margin-top:4px">
+          <input id="r-nombre"   class="login-input" placeholder="Nombre *"/>
+          <input id="r-apellido" class="login-input" placeholder="Apellido *"/>
+          <input id="r-dni"      class="login-input" placeholder="DNI *"/>
+          <input id="r-cel"      class="login-input" placeholder="Celular *"/>
+          <input id="r-mail"     class="login-input" type="email" placeholder="Mail *" value="${user.email||''}"/>
+        </div>
+        <button class="btn btn-primary" style="width:100%;margin-top:12px" onclick="enviarRegistro()">Solicitar acceso</button>
+        <p id="reg-msg" style="font-size:12px;margin-top:8px;text-align:center;min-height:18px"></p>
+        <button class="btn" style="width:100%;margin-top:8px" onclick="cerrarSesion()">Cancelar</button>
+      </div>
+    </div>`);
+}
+
+function renderEsperaAprobacion(perfil) {
+  setApp(`
+    <div class="login-wrap">
+      <div class="login-card">
+        <div class="login-logo">⏳</div>
+        <h1 class="login-title" style="font-size:18px">Registro pendiente</h1>
+        <p class="login-sub">Hola <strong>${perfil.nombre}</strong>, tu solicitud está siendo revisada por el administrador. Te avisarán cuando esté aprobada.</p>
+        <button class="btn" style="width:100%;margin-top:16px" onclick="cerrarSesion()">Salir</button>
+      </div>
+    </div>`);
+}
+
+function renderRechazado() {
+  setApp(`
+    <div class="login-wrap">
+      <div class="login-card">
+        <div class="login-logo">❌</div>
+        <h1 class="login-title" style="font-size:18px">Acceso denegado</h1>
+        <p class="login-sub">Tu solicitud no fue aprobada. Contactá al administrador si creés que es un error.</p>
+        <button class="btn" style="width:100%;margin-top:16px" onclick="cerrarSesion()">Salir</button>
+      </div>
+    </div>`);
+}
+
+// ─────────────────────────────────────────────────────────────
+// ACCIONES AUTH
+// ─────────────────────────────────────────────────────────────
 window.loginGoogle = async function() {
-  try {
-    const provider = new GoogleAuthProvider();
-    await signInWithPopup(auth, provider);
-  } catch(e) { showMsg('login-msg', 'Error: ' + e.message, true); }
+  try { await signInWithPopup(auth, new GoogleAuthProvider()); }
+  catch(e) { msg('login-msg', e.code==='auth/popup-closed-by-user'?'':'Error: '+e.message, true); }
 };
 
 window.loginMagicLink = async function() {
   const email = document.getElementById('login-mail').value.trim();
-  if (!email) return showMsg('login-msg', 'Escribí tu email', true);
+  if (!email) return msg('login-msg','Escribí tu email',true);
   try {
-    await sendSignInLinkToEmail(auth, email, {
-      url: APP_URL, handleCodeInApp: true
-    });
+    await sendSignInLinkToEmail(auth, email, {url:APP_URL, handleCodeInApp:true});
     localStorage.setItem('emailForSignIn', email);
-    showMsg('login-msg', `✅ Te enviamos un link a ${email}. Revisá tu correo.`, false);
-  } catch(e) { showMsg('login-msg', 'Error: ' + e.message, true); }
+    msg('login-msg',`✅ Link enviado a ${email}. Revisá tu correo.`,false);
+  } catch(e) { msg('login-msg','Error: '+e.message,true); }
 };
 
-// Participante autenticado pero no registrado por el admin
-function renderPerfilPendiente() {
-  document.getElementById('app').innerHTML = `
-    <div class="login-wrap">
-      <div class="login-card">
-        <div class="login-logo">⏳</div>
-        <h1 class="login-title" style="font-size:18px">Cuenta pendiente</h1>
-        <p class="login-sub">Tu cuenta (${auth.currentUser?.email}) todavía no fue registrada por el administrador. Avisale para que te agregue al prode.</p>
-        <button class="btn" style="width:100%;margin-top:16px" onclick="cerrarSesion()">Salir</button>
-      </div>
-    </div>`;
-}
-
-// Participante registrado pero con perfil incompleto
-function renderCompletarPerfil(perfil={}) {
-  document.getElementById('app').innerHTML = `
-    <div class="login-wrap">
-      <div class="login-card" style="max-width:420px">
-        <div class="login-logo">👤</div>
-        <h1 class="login-title" style="font-size:18px">Completá tu perfil</h1>
-        <p class="login-sub">Antes de continuar necesitamos algunos datos.</p>
-        <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">
-          <input id="p-nombre"   class="login-input" placeholder="Nombre *"    value="${perfil.nombre||''}"/>
-          <input id="p-apellido" class="login-input" placeholder="Apellido *"   value="${perfil.apellido||''}"/>
-          <input id="p-dni"      class="login-input" placeholder="DNI *"        value="${perfil.dni||''}"/>
-          <input id="p-cel"      class="login-input" placeholder="Celular *"    value="${perfil.cel||''}"/>
-          <input id="p-mail"     class="login-input" type="email" placeholder="Mail *" value="${perfil.mail||auth.currentUser?.email||''}"/>
-        </div>
-        <button class="btn btn-primary" style="width:100%;margin-top:12px" onclick="guardarPerfil()">Guardar y entrar</button>
-        <p id="perfil-msg" style="font-size:12px;margin-top:8px;text-align:center;display:none"></p>
-        <button class="btn" style="width:100%;margin-top:8px" onclick="cerrarSesion()">Salir</button>
-      </div>
-    </div>`;
-}
-
-window.guardarPerfil = async function() {
-  const nombre   = document.getElementById('p-nombre').value.trim();
-  const apellido = document.getElementById('p-apellido').value.trim();
-  const dni      = document.getElementById('p-dni').value.trim();
-  const cel      = document.getElementById('p-cel').value.trim();
-  const mail     = document.getElementById('p-mail').value.trim();
-  if (!nombre||!apellido||!dni||!cel||!mail) return showMsg('perfil-msg','Completá todos los campos',true);
-  const perfil = { nombre, apellido, dni, cel, mail, uid: S.uid };
+window.enviarRegistro = async function() {
+  const nombre   = v('r-nombre');
+  const apellido = v('r-apellido');
+  const dni      = v('r-dni');
+  const cel      = v('r-cel');
+  const mail     = v('r-mail');
+  if (!nombre||!apellido||!dni||!cel||!mail) return msg('reg-msg','Completá todos los campos',true);
+  const perfil = { nombre, apellido, dni, cel, mail, uid:S.uid, estado:'pendiente_aprobacion' };
   await fset('config/global', { participantes: { [S.uid]: perfil } });
-  S.perfil = perfil;
-  await startApp();
+  msg('reg-msg','✅ Solicitud enviada',false);
+  setTimeout(()=>renderEsperaAprobacion(perfil), 1200);
 };
 
 window.cerrarSesion = async function() { await signOut(auth); };
 
 // ─────────────────────────────────────────────────────────────
-// SHELL PRINCIPAL
+// SHELL
 // ─────────────────────────────────────────────────────────────
 function renderShell() {
-  const isAdmin = S.rol === 'admin';
-  const nombre  = S.perfil ? `${S.perfil.nombre} ${S.perfil.apellido}` : (auth.currentUser?.email||'');
-  document.getElementById('app').innerHTML = `
+  const isAdmin = S.rol==='admin';
+  const nombre  = S.perfil?`${S.perfil.nombre} ${S.perfil.apellido}`:(auth.currentUser?.email||'Admin');
+  setApp(`
     <div class="layout">
       <div class="sidebar">
         <div class="sidebar-header">
@@ -259,24 +305,33 @@ function renderShell() {
             <div style="font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${nombre}</div>
             <div style="font-size:11px;color:var(--c-text2)">${isAdmin?'Administrador':'Participante'}</div>
           </div>
-          <button class="btn btn-sm" onclick="cerrarSesion()" title="Salir">↩</button>
+          <button class="btn btn-sm" onclick="cerrarSesion()" title="Salir" style="padding:4px 8px">↩</button>
         </div>
-        ${isAdmin ? `
+        ${isAdmin?`
         <div class="sidebar-section">Global</div>
-        <div class="nav-item" id="nav-participantes" onclick="navTo('participantes')">👥 Participantes</div>
-        <div class="nav-item" id="nav-admins" onclick="navTo('admins')">🔑 Administradores</div>` : `
-        <div class="sidebar-section">Mi perfil</div>
+        <div class="nav-item" id="nav-participantes" onclick="navTo('participantes')">👥 Participantes <span id="badge-pendientes" style="display:none;background:var(--c-danger);color:#fff;border-radius:10px;font-size:10px;padding:1px 6px;margin-left:auto"></span></div>
+        <div class="nav-item" id="nav-admins" onclick="navTo('admins')">🔑 Admins</div>`:`
+        <div class="sidebar-section">Mi cuenta</div>
         <div class="nav-item" id="nav-miperfil" onclick="navTo('miperfil')">👤 Mis datos</div>`}
         <div class="sidebar-section">Torneos</div>
         <div id="torneos-nav"></div>
-        ${isAdmin ? `<div class="nav-add" onclick="navTo('nuevo-torneo')">+ Nuevo torneo</div>` : ''}
+        ${isAdmin?`<div class="nav-add" onclick="navTo('nuevo-torneo')">+ Nuevo torneo</div>`:''}
       </div>
       <div class="content" id="content">
         <div class="empty-state">Seleccioná un torneo del menú</div>
       </div>
-    </div>`;
+    </div>`);
   renderTorneosNav();
-  suscribirTorneos();
+  actualizarBadgePendientes();
+}
+
+function actualizarBadgePendientes() {
+  if (S.rol!=='admin') return;
+  const el = document.getElementById('badge-pendientes');
+  if (!el) return;
+  const n = Object.values(allParts()).filter(p=>p.estado==='pendiente_aprobacion').length;
+  if (n>0) { el.textContent=n; el.style.display=''; }
+  else el.style.display='none';
 }
 
 function renderTorneosNav() {
@@ -284,13 +339,10 @@ function renderTorneosNav() {
   if (!nav) return;
   const ts = torneos();
   if (!ts.length) { nav.innerHTML='<div style="font-size:12px;color:var(--c-text3);padding:6px 10px">Sin torneos</div>'; return; }
-
-  // Filtrar: participante solo ve torneos donde está asignado
-  const visible = S.rol==='admin' ? ts : ts.filter(t => {
-    const td = S.data.torneos[t.id];
-    return td && (td.participantes||[]).includes(S.uid);
+  const visible = S.rol==='admin' ? ts : ts.filter(t=>{
+    const td=S.data.torneos[t.id];
+    return td&&(td.participantes||[]).includes(S.uid);
   });
-
   nav.innerHTML = visible.map(t=>`
     <div class="nav-item ${S.torneoActivo===t.id?'active':''}" onclick="selectTorneo('${t.id}')">
       <span>${t.nombre}</span>
@@ -299,80 +351,64 @@ function renderTorneosNav() {
 }
 
 window.selectTorneo = function(id) {
-  S.torneoActivo = id;
-  renderTorneosNav();
-  refreshTorneoView();
+  S.torneoActivo=id; renderTorneosNav(); refreshTorneoView();
 };
 
 window.navTo = function(dest) {
-  S.torneoActivo = null;
-  renderTorneosNav();
+  S.torneoActivo=null; renderTorneosNav();
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
-  const el = document.getElementById('nav-'+dest);
-  if (el) el.classList.add('active');
-  const content = document.getElementById('content');
-  if (dest==='participantes')  renderViewParticipantes(content);
-  else if (dest==='admins')    renderViewAdmins(content);
-  else if (dest==='miperfil')  renderViewMiPerfil(content);
-  else if (dest==='nuevo-torneo') renderViewNuevoTorneo(content);
+  const el=document.getElementById('nav-'+dest); if(el)el.classList.add('active');
+  const c=document.getElementById('content');
+  if(dest==='participantes') renderViewParticipantes(c);
+  else if(dest==='admins')   renderViewAdmins(c);
+  else if(dest==='miperfil') renderViewMiPerfil(c);
+  else if(dest==='nuevo-torneo') renderViewNuevoTorneo(c);
 };
 
 // ─────────────────────────────────────────────────────────────
 // VISTA TORNEO
 // ─────────────────────────────────────────────────────────────
 function refreshTorneoView() {
-  const content = document.getElementById('content');
-  if (!content || !S.torneoActivo) return;
-  const t = T();
-  if (!t) { content.innerHTML='<div class="empty-state">Cargando...</div>'; return; }
-  const isAdmin = S.rol==='admin';
-
-  const tabs = isAdmin
-    ? ['participantes-t','equipos','fechas','resultados','pronosticos','pagos','premios','posiciones']
-    : ['pronosticos','posiciones'];
-  const labels = {'participantes-t':'Participantes','equipos':'Equipos','fechas':'Fechas',
+  const content=document.getElementById('content');
+  if(!content||!S.torneoActivo) return;
+  const t=T();
+  if(!t){content.innerHTML='<div class="empty-state">Cargando...</div>';return;}
+  const isAdmin=S.rol==='admin';
+  const tabs=isAdmin
+    ?['participantes-t','equipos','fechas','resultados','pronosticos','pagos','premios','posiciones']
+    :['pronosticos','posiciones'];
+  const labels={'participantes-t':'Participantes','equipos':'Equipos','fechas':'Fechas',
     'resultados':'Resultados','pronosticos':'Pronósticos','pagos':'Pagos','premios':'Premios','posiciones':'Posiciones'};
-
-  const curTab = content.dataset.activeTab;
-  const defTab = isAdmin ? 'participantes-t' : 'pronosticos';
-  const activeTab = tabs.includes(curTab) ? curTab : defTab;
-
-  const m = meta();
-  content.innerHTML = `
+  const curTab=content.dataset.activeTab;
+  const defTab=isAdmin?'participantes-t':'pronosticos';
+  const activeTab=tabs.includes(curTab)?curTab:defTab;
+  const m=meta();
+  content.innerHTML=`
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:6px">
       <div>
         <span style="font-size:14px;font-weight:500">${m.nombre||''}</span>
         <span class="sistema-badge">${m.sistema==='1x2'?'1X2':'Resultado exacto'}</span>
       </div>
-      ${isAdmin?`<button class="btn btn-sm btn-danger" onclick="eliminarTorneo()">Eliminar torneo</button>`:''}
+      ${isAdmin?`<button class="btn btn-sm btn-danger" onclick="eliminarTorneo()">Eliminar</button>`:''}
     </div>
     <div class="tabs">${tabs.map(id=>`<div class="tab ${id===activeTab?'active':''}" onclick="switchTab('${id}',this)">${labels[id]}</div>`).join('')}</div>
     <div id="tab-content"></div>`;
-
-  content.dataset.activeTab = activeTab;
+  content.dataset.activeTab=activeTab;
   renderTab(activeTab);
 }
 
-window.switchTab = function(id, el) {
+window.switchTab=function(id,el){
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
   el.classList.add('active');
-  document.getElementById('content').dataset.activeTab = id;
+  document.getElementById('content').dataset.activeTab=id;
   renderTab(id);
 };
 
 function renderTab(id) {
-  const el = document.getElementById('tab-content');
-  if (!el) return;
-  ({
-    'participantes-t': renderTabParticipantes,
-    'equipos':         renderTabEquipos,
-    'fechas':          renderTabFechas,
-    'resultados':      renderTabResultados,
-    'pronosticos':     renderTabPronosticos,
-    'pagos':           renderTabPagos,
-    'premios':         renderTabPremios,
-    'posiciones':      renderTabPosiciones,
-  }[id] || (()=>{}))(el);
+  const el=document.getElementById('tab-content'); if(!el)return;
+  ({'participantes-t':renderTabParticipantes,'equipos':renderTabEquipos,'fechas':renderTabFechas,
+    'resultados':renderTabResultados,'pronosticos':renderTabPronosticos,
+    'pagos':renderTabPagos,'premios':renderTabPremios,'posiciones':renderTabPosiciones}[id]||(_=>{}))(el);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -380,130 +416,161 @@ function renderTab(id) {
 // ─────────────────────────────────────────────────────────────
 function renderViewParticipantes(content) {
   const parts = allParts();
-  const rows = Object.entries(parts).map(([uid, p])=>`
-    <tr>
-      <td>${p.nombre} ${p.apellido}</td>
-      <td>${p.dni}</td>
-      <td>${p.cel}</td>
-      <td>${p.mail}</td>
-      <td><span style="font-size:10px;color:var(--c-text3);word-break:break-all">${uid}</span></td>
-      <td><button class="btn btn-sm btn-danger" onclick="removeParticipante('${uid}')">✕</button></td>
-    </tr>`).join('');
+  const pendientes  = Object.entries(parts).filter(([,p])=>p.estado==='pendiente_aprobacion');
+  const pendLogin   = Object.entries(parts).filter(([,p])=>p.estado==='pendiente_login');
+  const activos     = Object.entries(parts).filter(([,p])=>p.estado==='activo');
+  const rechazados  = Object.entries(parts).filter(([,p])=>p.estado==='rechazado');
 
-  content.innerHTML = `
-    <p class="section-title">Participantes globales</p>
-    <p class="sub">Registrá a cada persona. El participante debe ingresar con el mismo mail para que el sistema lo reconozca.</p>
-    <div class="card" style="max-width:500px">
-      <p style="font-size:13px;font-weight:500;margin-bottom:8px">Agregar participante</p>
+  content.innerHTML=`
+    <p class="section-title">Participantes</p>
+
+    ${pendientes.length?`
+    <div class="card" style="border-color:var(--c-warn-border)">
+      <p style="font-size:13px;font-weight:500;margin-bottom:8px;color:var(--c-warn)">⏳ Pendientes de aprobación (${pendientes.length})</p>
+      ${pendientes.map(([uid,p])=>`
+        <div class="part-row">
+          <div class="part-info"><strong>${p.nombre} ${p.apellido}</strong><span>${p.mail}</span><span>DNI: ${p.dni} · Cel: ${p.cel}</span></div>
+          <div style="display:flex;gap:6px">
+            <button class="btn btn-sm btn-primary" onclick="aprobarPart('${uid}')">✓ Aprobar</button>
+            <button class="btn btn-sm btn-danger" onclick="rechazarPart('${uid}')">✕ Rechazar</button>
+          </div>
+        </div>`).join('')}
+    </div>`:``}
+
+    <div class="card">
+      <p style="font-size:13px;font-weight:500;margin-bottom:8px">Cargar participante manualmente</p>
       <div class="row"><label class="lbl">Nombre:</label><input id="pn" placeholder="Nombre *"/></div>
       <div class="row"><label class="lbl">Apellido:</label><input id="pa" placeholder="Apellido *"/></div>
       <div class="row"><label class="lbl">DNI:</label><input id="pd" placeholder="DNI *"/></div>
       <div class="row"><label class="lbl">Celular:</label><input id="pc" placeholder="Celular *"/></div>
       <div class="row"><label class="lbl">Mail:</label><input id="pm" type="email" placeholder="Mail * (debe coincidir con su login)"/></div>
-      <button class="btn btn-primary btn-sm" onclick="addParticipante()">Agregar</button>
-      <p id="part-msg" style="font-size:12px;margin-top:6px;display:none"></p>
+      <button class="btn btn-primary btn-sm" onclick="addParticipanteManual()">Agregar</button>
+      <p id="part-msg" style="font-size:12px;margin-top:6px;min-height:16px"></p>
     </div>
-    ${Object.keys(parts).length ? `
+
+    ${activos.length?`
+    <p style="font-size:12px;font-weight:500;color:var(--c-text2);margin-bottom:6px">✅ Activos (${activos.length})</p>
     <div style="overflow-x:auto"><table>
-      <thead><tr><th>Nombre y apellido</th><th>DNI</th><th>Cel</th><th>Mail</th><th>UID</th><th></th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table></div>` : '<p class="sub">Sin participantes aún.</p>'}`;
+      <thead><tr><th>Nombre</th><th>DNI</th><th>Cel</th><th>Mail</th><th></th></tr></thead>
+      <tbody>${activos.map(([uid,p])=>`
+        <tr>
+          <td style="font-weight:500">${p.nombre} ${p.apellido}</td>
+          <td>${p.dni}</td><td>${p.cel}</td><td>${p.mail}</td>
+          <td><button class="btn btn-sm btn-danger" onclick="desactivarPart('${uid}')">Desactivar</button></td>
+        </tr>`).join('')}
+      </tbody>
+    </table></div>`:``}
+
+    ${pendLogin.length?`
+    <p style="font-size:12px;font-weight:500;color:var(--c-text2);margin:10px 0 6px">📧 Esperando primer login (${pendLogin.length})</p>
+    ${pendLogin.map(([uid,p])=>`
+      <div class="part-row" style="opacity:.7">
+        <div class="part-info"><strong>${p.nombre} ${p.apellido}</strong><span>${p.mail}</span></div>
+        <button class="btn btn-sm btn-danger" onclick="eliminarPart('${uid}')">✕</button>
+      </div>`).join('')}`:``}
+
+    ${rechazados.length?`
+    <p style="font-size:12px;font-weight:500;color:var(--c-text2);margin:10px 0 6px">❌ Rechazados (${rechazados.length})</p>
+    ${rechazados.map(([uid,p])=>`
+      <div class="part-row" style="opacity:.6">
+        <div class="part-info"><strong>${p.nombre} ${p.apellido}</strong><span>${p.mail}</span></div>
+        <button class="btn btn-sm btn-primary" onclick="aprobarPart('${uid}')">Reactivar</button>
+      </div>`).join('')}`:``}`;
 }
 
-window.addParticipante = async function() {
-  const nombre   = document.getElementById('pn').value.trim();
-  const apellido = document.getElementById('pa').value.trim();
-  const dni      = document.getElementById('pd').value.trim();
-  const cel      = document.getElementById('pc').value.trim();
-  const mail     = document.getElementById('pm').value.trim();
-  if (!nombre||!apellido||!dni||!cel||!mail) return showMsg('part-msg','Completá todos los campos',true);
-
-  // Buscar si ya existe un usuario con ese mail en participantes
-  const parts = allParts();
-  const existe = Object.values(parts).find(p=>p.mail===mail);
-  if (existe) return showMsg('part-msg',`Ya existe un participante con ese mail.`,true);
-
-  // Crear con mail como ID temporal hasta que el usuario haga login
-  // Usamos mail-hash como key temporal, se reemplaza cuando hace login
-  const tempId = 'pending_' + mail.replace(/[^a-zA-Z0-9]/g,'_');
-  const perfil = { nombre, apellido, dni, cel, mail, uid: tempId, pendiente: true };
-  await fset('config/global', { participantes: { [tempId]: perfil } });
-  showMsg('part-msg','✅ Participante agregado. Cuando ingrese con su mail, se vinculará automáticamente.',false);
+window.addParticipanteManual = async function() {
+  const nombre=v('pn'),apellido=v('pa'),dni=v('pd'),cel=v('pc'),mail=v('pm');
+  if(!nombre||!apellido||!dni||!cel||!mail) return msg('part-msg','Completá todos los campos',true);
+  const parts=allParts();
+  const existe=Object.values(parts).find(p=>p.mail===mail);
+  if(existe) return msg('part-msg','Ya existe un participante con ese mail.',true);
+  const tempId='pending_'+mail.replace(/[^a-zA-Z0-9]/g,'_')+'_'+Date.now();
+  await fset('config/global',{participantes:{[tempId]:{nombre,apellido,dni,cel,mail,uid:tempId,estado:'pendiente_login'}}});
+  msg('part-msg','✅ Participante cargado. Recibirá acceso al ingresar con ese mail.',false);
   ['pn','pa','pd','pc','pm'].forEach(id=>document.getElementById(id).value='');
 };
 
-window.removeParticipante = async function(uid) {
-  if (!confirm('¿Eliminar este participante?')) return;
-  // Firestore no soporta deleteField en maps anidados directamente, usamos workaround
-  const parts = JSON.parse(JSON.stringify(allParts()));
+window.aprobarPart = async function(uid) {
+  const parts=JSON.parse(JSON.stringify(allParts()));
+  if(parts[uid]) parts[uid].estado='activo';
+  await fset('config/global',{participantes:parts});
+};
+window.rechazarPart = async function(uid) {
+  const parts=JSON.parse(JSON.stringify(allParts()));
+  if(parts[uid]) parts[uid].estado='rechazado';
+  await fset('config/global',{participantes:parts});
+};
+window.desactivarPart = async function(uid) {
+  if(!confirm('¿Desactivar este participante?')) return;
+  const parts=JSON.parse(JSON.stringify(allParts()));
+  if(parts[uid]) parts[uid].estado='rechazado';
+  await fset('config/global',{participantes:parts});
+};
+window.eliminarPart = async function(uid) {
+  if(!confirm('¿Eliminar?')) return;
+  const parts=JSON.parse(JSON.stringify(allParts()));
   delete parts[uid];
-  await fset('config/global', { participantes: parts });
+  await fset('config/global',{participantes:parts});
 };
 
 // ─────────────────────────────────────────────────────────────
 // ADMIN — ADMINISTRADORES
 // ─────────────────────────────────────────────────────────────
 function renderViewAdmins(content) {
-  const admins = cfg().admins || [];
-  content.innerHTML = `
+  const ads=admins();
+  content.innerHTML=`
     <p class="section-title">Administradores</p>
-    <p class="sub">Los administradores tienen acceso total. Tu UID actual es: <code style="font-size:11px">${S.uid}</code></p>
+    <p class="sub">Tu UID: <code>${S.uid}</code></p>
     <div class="card" style="max-width:460px">
-      <p style="font-size:13px;font-weight:500;margin-bottom:8px">Agregar administrador por UID</p>
-      <div class="row"><input id="admin-uid" placeholder="UID del usuario..."/><button class="btn btn-primary btn-sm" onclick="addAdmin()">Agregar</button></div>
-      <p class="sub">El UID lo encontrás en Participantes una vez que el usuario haya ingresado.</p>
+      <div class="row">
+        <input id="admin-uid" placeholder="UID del usuario..."/>
+        <button class="btn btn-primary btn-sm" onclick="addAdmin()">Agregar</button>
+      </div>
+      <p class="sub">El UID aparece en Participantes → Activos una vez que el usuario ingresó.</p>
     </div>
-    <div class="chips">${admins.map(uid=>`<span class="chip">${uid}<span class="x" onclick="removeAdmin('${uid}')">✕</span></span>`).join('')}</div>`;
+    <div class="chips">${ads.map(uid=>`<span class="chip">${uid}<span class="x" onclick="removeAdmin('${uid}')">✕</span></span>`).join('')}</div>`;
 }
-window.addAdmin = async function() {
-  const uid = document.getElementById('admin-uid').value.trim();
-  if (!uid) return;
-  const admins = [...(cfg().admins||[])];
-  if (!admins.includes(uid)) admins.push(uid);
-  await fset('config/global', { admins });
+window.addAdmin=async function(){
+  const uid=v('admin-uid'); if(!uid)return;
+  const ads=[...(admins())]; if(!ads.includes(uid))ads.push(uid);
+  await fset('config/global',{admins:ads});
   document.getElementById('admin-uid').value='';
 };
-window.removeAdmin = async function(uid) {
-  if (uid===S.uid && !confirm('¿Quitarte a vos mismo como admin?')) return;
-  const admins = (cfg().admins||[]).filter(u=>u!==uid);
-  await fset('config/global', { admins });
+window.removeAdmin=async function(uid){
+  if(uid===S.uid&&!confirm('¿Quitarte como admin?'))return;
+  await fset('config/global',{admins:admins().filter(u=>u!==uid)});
 };
 
 // ─────────────────────────────────────────────────────────────
-// MI PERFIL (participante)
+// MI PERFIL
 // ─────────────────────────────────────────────────────────────
 function renderViewMiPerfil(content) {
-  const p = S.perfil || {};
-  content.innerHTML = `
+  const p=S.perfil||{};
+  content.innerHTML=`
     <p class="section-title">Mis datos</p>
     <div class="card" style="max-width:400px">
-      <div class="row"><label class="lbl">Nombre:</label><input id="mp-nombre" value="${p.nombre||''}"/></div>
-      <div class="row"><label class="lbl">Apellido:</label><input id="mp-apellido" value="${p.apellido||''}"/></div>
-      <div class="row"><label class="lbl">DNI:</label><input id="mp-dni" value="${p.dni||''}"/></div>
-      <div class="row"><label class="lbl">Celular:</label><input id="mp-cel" value="${p.cel||''}"/></div>
-      <div class="row"><label class="lbl">Mail:</label><input id="mp-mail" type="email" value="${p.mail||auth.currentUser?.email||''}"/></div>
+      <div class="row"><label class="lbl">Nombre:</label><input id="mp-n" value="${p.nombre||''}"/></div>
+      <div class="row"><label class="lbl">Apellido:</label><input id="mp-a" value="${p.apellido||''}"/></div>
+      <div class="row"><label class="lbl">DNI:</label><input id="mp-d" value="${p.dni||''}"/></div>
+      <div class="row"><label class="lbl">Celular:</label><input id="mp-c" value="${p.cel||''}"/></div>
+      <div class="row"><label class="lbl">Mail:</label><input id="mp-m" type="email" value="${p.mail||auth.currentUser?.email||''}"/></div>
       <button class="btn btn-primary btn-sm" onclick="guardarMiPerfil()">Guardar</button>
-      <p id="miperfil-msg" style="font-size:12px;margin-top:6px;display:none"></p>
+      <p id="mp-msg" style="font-size:12px;margin-top:6px;min-height:16px"></p>
     </div>`;
 }
-window.guardarMiPerfil = async function() {
-  const nombre   = document.getElementById('mp-nombre').value.trim();
-  const apellido = document.getElementById('mp-apellido').value.trim();
-  const dni      = document.getElementById('mp-dni').value.trim();
-  const cel      = document.getElementById('mp-cel').value.trim();
-  const mail     = document.getElementById('mp-mail').value.trim();
-  if (!nombre||!apellido||!dni||!cel||!mail) return showMsg('miperfil-msg','Completá todos los campos',true);
-  const perfil = { nombre, apellido, dni, cel, mail, uid: S.uid, pendiente: false };
-  await fset('config/global', { participantes: { [S.uid]: perfil } });
-  S.perfil = perfil;
-  showMsg('miperfil-msg','✅ Datos guardados',false);
+window.guardarMiPerfil=async function(){
+  const nombre=v('mp-n'),apellido=v('mp-a'),dni=v('mp-d'),cel=v('mp-c'),mail=v('mp-m');
+  if(!nombre||!apellido||!dni||!cel||!mail)return msg('mp-msg','Completá todos los campos',true);
+  const perfil={...S.perfil,nombre,apellido,dni,cel,mail,uid:S.uid};
+  await fset('config/global',{participantes:{[S.uid]:perfil}});
+  S.perfil=perfil; msg('mp-msg','✅ Guardado',false);
 };
 
 // ─────────────────────────────────────────────────────────────
 // TORNEOS
 // ─────────────────────────────────────────────────────────────
 function renderViewNuevoTorneo(content) {
-  content.innerHTML = `
+  content.innerHTML=`
     <p class="section-title">Nuevo torneo</p>
     <div class="card" style="max-width:420px">
       <div class="row"><label class="lbl">Nombre:</label><input id="nuevo-nombre" placeholder="Ej: Apertura 2025..."/></div>
@@ -513,27 +580,22 @@ function renderViewNuevoTorneo(content) {
           <option value="exacto">Resultado exacto (3 pts exacto, 1 pt signo)</option>
         </select>
       </div>
-      <div class="row" style="margin-bottom:0">
-        <button class="btn btn-primary btn-sm" onclick="crearTorneo()">Crear</button>
-      </div>
+      <button class="btn btn-primary btn-sm" onclick="crearTorneo()">Crear</button>
     </div>`;
 }
-window.crearTorneo = async function() {
-  const nombre = document.getElementById('nuevo-nombre').value.trim();
-  const sistema = document.getElementById('nuevo-sistema').value;
-  if (!nombre) return;
-  const id = 'torneo_' + Date.now();
-  await fset('config/global', { torneos: [...torneos(), {id,nombre,sistema}] });
-  await fset(`torneos/${id}`, { participantes:[], equipos:[], fechas:[], pronosticos:{}, resultados:{}, ausencias:{}, pagos:{}, cuota:500, premiosCfg:{} });
-  S.torneoActivo = id;
-  renderShell();
-  setTimeout(()=>selectTorneo(id),400);
+window.crearTorneo=async function(){
+  const nombre=v('nuevo-nombre'); const sistema=document.getElementById('nuevo-sistema').value;
+  if(!nombre)return;
+  const id='torneo_'+Date.now();
+  await fset('config/global',{torneos:[...torneos(),{id,nombre,sistema}]});
+  await fset(`torneos/${id}`,{participantes:[],equipos:[],fechas:[],pronosticos:{},resultados:{},ausencias:{},pagos:{},cuota:500,premiosCfg:{}});
+  S.torneoActivo=id; renderShell(); setTimeout(()=>selectTorneo(id),400);
 };
-window.eliminarTorneo = async function() {
-  if (!confirm('¿Eliminar este torneo?')) return;
-  const id = S.torneoActivo;
-  await fset('config/global', { torneos: torneos().filter(t=>t.id!==id) });
-  S.torneoActivo = null;
+window.eliminarTorneo=async function(){
+  if(!confirm('¿Eliminar este torneo?'))return;
+  const id=S.torneoActivo;
+  await fset('config/global',{torneos:torneos().filter(t=>t.id!==id)});
+  S.torneoActivo=null;
   document.getElementById('content').innerHTML='<div class="empty-state">Seleccioná un torneo</div>';
 };
 
@@ -541,79 +603,71 @@ window.eliminarTorneo = async function() {
 // TAB PARTICIPANTES DEL TORNEO
 // ─────────────────────────────────────────────────────────────
 function renderTabParticipantes(el) {
-  const t = T(); if (!t) return;
-  const asignados = t.participantes || [];
-  const parts = allParts();
-  const registrados = Object.entries(parts).filter(([,p])=>!p.pendiente);
-  const pendientes  = Object.entries(parts).filter(([,p])=>p.pendiente);
-
-  el.innerHTML = `
+  const t=T();if(!t)return;
+  const asignados=t.participantes||[];
+  const activos=Object.entries(allParts()).filter(([,p])=>p.estado==='activo');
+  el.innerHTML=`
     <p class="sub" style="margin-top:4px">Seleccioná quiénes juegan en este torneo.</p>
-    ${!registrados.length && !pendientes.length ? '<p class="sub">No hay participantes globales. Agregá desde el menú → Participantes.</p>' : ''}
-    ${registrados.map(([uid,p])=>{
-      const ok = asignados.includes(uid);
-      return `<div class="part-check-row ${ok?'assigned':''}">
+    ${!activos.length?'<p class="sub">No hay participantes activos aún.</p>':activos.map(([uid,p])=>{
+      const ok=asignados.includes(uid);
+      return`<div class="part-check-row ${ok?'assigned':''}">
         <div><span style="font-weight:500">${p.nombre} ${p.apellido}</span> <span style="font-size:11px;color:var(--c-text2)">${p.mail}</span></div>
         <button class="btn btn-sm ${ok?'btn-danger':'btn-primary'}" onclick="togglePartTorneo('${uid}')">${ok?'Quitar':'Agregar'}</button>
       </div>`;
-    }).join('')}
-    ${pendientes.length ? `<p class="sub" style="margin-top:10px">⏳ Pendientes de primer login:</p>
-    ${pendientes.map(([uid,p])=>`<div class="part-check-row" style="opacity:.6"><div><span>${p.nombre} ${p.apellido}</span> <span style="font-size:11px;color:var(--c-text2)">${p.mail}</span></div><span class="badge badge-amber">No ingresó aún</span></div>`).join('')}` : ''}`;
+    }).join('')}`;
 }
-window.togglePartTorneo = async function(uid) {
-  const t = T(); if (!t) return;
-  const lista = [...(t.participantes||[])];
-  const idx = lista.indexOf(uid);
-  if (idx>=0) lista.splice(idx,1); else lista.push(uid);
-  await fupd(`torneos/${S.torneoActivo}`, { participantes: lista });
+window.togglePartTorneo=async function(uid){
+  const t=T();if(!t)return;
+  const lista=[...(t.participantes||[])];
+  const idx=lista.indexOf(uid);
+  if(idx>=0)lista.splice(idx,1);else lista.push(uid);
+  await fupd(`torneos/${S.torneoActivo}`,{participantes:lista});
 };
 
 // ─────────────────────────────────────────────────────────────
 // TAB EQUIPOS
 // ─────────────────────────────────────────────────────────────
-function renderTabEquipos(el) {
-  const t = T(); if (!t) return;
-  el.innerHTML = `
+function renderTabEquipos(el){
+  const t=T();if(!t)return;
+  el.innerHTML=`
     <p class="sub" style="margin-top:4px">Equipos de este torneo.</p>
     <div class="row"><input id="eq-input" placeholder="Nombre del equipo..." onkeydown="if(event.key==='Enter')addEquipo()"/><button class="btn btn-primary btn-sm" onclick="addEquipo()">Agregar</button></div>
     <div class="chips">${(t.equipos||[]).map((v,i)=>`<span class="chip">${v}<span class="x" onclick="removeEquipo(${i})">✕</span></span>`).join('')}</div>`;
 }
-window.addEquipo = async function() {
-  const v = document.getElementById('eq-input').value.trim(); if (!v) return;
-  const t = T(); if (!t) return;
-  const lista = [...(t.equipos||[])];
-  if (lista.includes(v)) return;
-  lista.push(v);
-  await fupd(`torneos/${S.torneoActivo}`, { equipos: lista });
+window.addEquipo=async function(){
+  const val=v('eq-input');if(!val)return;
+  const t=T();if(!t)return;
+  const lista=[...(t.equipos||[])];if(lista.includes(val))return;
+  lista.push(val);await fupd(`torneos/${S.torneoActivo}`,{equipos:lista});
   document.getElementById('eq-input').value='';
 };
-window.removeEquipo = async function(i) {
-  const t = T(); if (!t) return;
-  const lista = [...(t.equipos||[])]; lista.splice(i,1);
-  await fupd(`torneos/${S.torneoActivo}`, { equipos: lista });
+window.removeEquipo=async function(i){
+  const t=T();if(!t)return;
+  const lista=[...(t.equipos||[])];lista.splice(i,1);
+  await fupd(`torneos/${S.torneoActivo}`,{equipos:lista});
 };
 
 // ─────────────────────────────────────────────────────────────
 // TAB FECHAS
 // ─────────────────────────────────────────────────────────────
-function libresEnFecha(fi) {
-  const t = T(); if (!t) return [];
-  const usados = new Set();
+function libresEnFecha(fi){
+  const t=T();if(!t)return[];
+  const usados=new Set();
   (t.fechas?.[fi]?.partidos||[]).forEach(p=>{usados.add(p.local);usados.add(p.visita);});
-  return (t.equipos||[]).filter(e=>!usados.has(e));
+  return(t.equipos||[]).filter(e=>!usados.has(e));
 }
-function renderTabFechas(el) {
-  const t = T(); if (!t) return;
-  const fechas = t.fechas || [];
-  el.innerHTML = `
+function renderTabFechas(el){
+  const t=T();if(!t)return;
+  const fechas=t.fechas||[];
+  el.innerHTML=`
     <div class="row" style="margin-top:4px">
       <input id="fecha-nombre" placeholder="Ej: Fecha 1..."/>
       <button class="btn btn-primary btn-sm" onclick="addFecha()">Crear fecha</button>
     </div>
-    ${!fechas.length ? '<p class="sub">No hay fechas aún.</p>' : fechas.map((f,fi)=>{
-      const libres = libresEnFecha(fi);
-      const opts = libres.map(e=>`<option>${e}</option>`).join('');
-      return `<div class="card">
+    ${!fechas.length?'<p class="sub">No hay fechas aún.</p>':fechas.map((f,fi)=>{
+      const libres=libresEnFecha(fi);
+      const opts=libres.map(e=>`<option>${e}</option>`).join('');
+      return`<div class="card">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
           <span style="font-weight:500;font-size:13px">${f.nombre}</span>
           <button class="btn btn-sm btn-danger" onclick="removeFecha(${fi})">Eliminar</button>
@@ -624,143 +678,129 @@ function renderTabFechas(el) {
             <button class="btn btn-sm btn-danger" onclick="removePartido(${fi},${pi})">✕</button>
           </div>`).join('')}
         ${libres.length>=2
-          ? `<div class="row" style="margin-top:6px">
+          ?`<div class="row" style="margin-top:6px">
               <select id="local-${fi}">${opts}</select>
               <span style="color:var(--c-text3);font-size:11px">vs</span>
               <select id="visita-${fi}">${opts}</select>
               <button class="btn btn-sm btn-primary" onclick="addPartido(${fi})">+ Partido</button>
-             </div>`
-          : `<p style="font-size:11px;color:var(--c-text2);margin-top:6px">${libres.length===1?'Solo queda 1 equipo.':'Todos los equipos asignados.'}</p>`}
+            </div>`
+          :`<p style="font-size:11px;color:var(--c-text2);margin-top:6px">${libres.length===1?'Solo queda 1 equipo.':'Todos los equipos asignados.'}</p>`}
       </div>`;
     }).join('')}`;
 }
-window.addFecha = async function() {
-  const n = document.getElementById('fecha-nombre').value.trim(); if (!n) return;
-  const t = T(); if (!t) return;
-  const fechas = [...(t.fechas||[]), {nombre:n, partidos:[]}];
-  await fupd(`torneos/${S.torneoActivo}`, {fechas});
+window.addFecha=async function(){
+  const n=v('fecha-nombre');if(!n)return;
+  const t=T();if(!t)return;
+  await fupd(`torneos/${S.torneoActivo}`,{fechas:[...(t.fechas||[]),{nombre:n,partidos:[]}]});
   document.getElementById('fecha-nombre').value='';
 };
-window.removeFecha = async function(fi) {
-  const t = T(); if (!t) return;
-  const fechas = [...(t.fechas||[])]; fechas.splice(fi,1);
-  await fupd(`torneos/${S.torneoActivo}`, {fechas});
+window.removeFecha=async function(fi){
+  const t=T();if(!t)return;
+  const fechas=[...(t.fechas||[])];fechas.splice(fi,1);
+  await fupd(`torneos/${S.torneoActivo}`,{fechas});
 };
-window.addPartido = async function(fi) {
-  const t = T(); if (!t) return;
-  const l = document.getElementById('local-'+fi).value;
-  const v = document.getElementById('visita-'+fi).value;
-  if (!l||!v||l===v) { alert('Seleccioná dos equipos distintos'); return; }
-  const fechas = JSON.parse(JSON.stringify(t.fechas||[]));
-  fechas[fi].partidos = [...(fechas[fi].partidos||[]), {local:l,visita:v}];
-  await fupd(`torneos/${S.torneoActivo}`, {fechas});
+window.addPartido=async function(fi){
+  const t=T();if(!t)return;
+  const l=document.getElementById('local-'+fi).value;
+  const vv=document.getElementById('visita-'+fi).value;
+  if(!l||!vv||l===vv){alert('Seleccioná dos equipos distintos');return;}
+  const fechas=JSON.parse(JSON.stringify(t.fechas||[]));
+  fechas[fi].partidos=[...(fechas[fi].partidos||[]),{local:l,visita:vv}];
+  await fupd(`torneos/${S.torneoActivo}`,{fechas});
 };
-window.removePartido = async function(fi,pi) {
-  const t = T(); if (!t) return;
-  const fechas = JSON.parse(JSON.stringify(t.fechas||[]));
+window.removePartido=async function(fi,pi){
+  const t=T();if(!t)return;
+  const fechas=JSON.parse(JSON.stringify(t.fechas||[]));
   fechas[fi].partidos.splice(pi,1);
-  await fupd(`torneos/${S.torneoActivo}`, {fechas});
+  await fupd(`torneos/${S.torneoActivo}`,{fechas});
 };
 
 // ─────────────────────────────────────────────────────────────
-// TAB RESULTADOS (admin)
+// TAB RESULTADOS
 // ─────────────────────────────────────────────────────────────
-function renderTabResultados(el) {
-  const t = T(); if (!t) return;
-  const m = meta();
-  const fechas = t.fechas||[];
-  if (!fechas.length) { el.innerHTML='<p class="sub" style="margin-top:4px">No hay fechas.</p>'; return; }
-  el.innerHTML = fechas.map((f,fi)=>`
+function renderTabResultados(el){
+  const t=T();if(!t)return;const m=meta();const fechas=t.fechas||[];
+  if(!fechas.length){el.innerHTML='<p class="sub" style="margin-top:4px">No hay fechas.</p>';return;}
+  el.innerHTML=fechas.map((f,fi)=>`
     <div class="card">
       <p style="font-weight:500;font-size:13px;margin-bottom:8px">${f.nombre}</p>
-      ${!(f.partidos||[]).length ? '<p class="sub">Sin partidos.</p>' : (f.partidos||[]).map((p,pi)=>{
-        const signo = t.resultados?.[`${fi}-${pi}-signo`]||'';
-        const res   = t.resultados?.[`${fi}-${pi}`]||{gl:'',gv:''};
-        return `<div class="partido-block">
+      ${!(f.partidos||[]).length?'<p class="sub">Sin partidos.</p>':(f.partidos||[]).map((p,pi)=>{
+        const signo=t.resultados?.[`${fi}-${pi}-signo`]||'';
+        const res=t.resultados?.[`${fi}-${pi}`]||{gl:'',gv:''};
+        return`<div class="partido-block">
           <div class="partido-header"><div class="team-name">${p.local}</div><div class="vs-label">vs</div><div class="team-name">${p.visita}</div></div>
           ${m.sistema==='1x2'
-            ? `<div class="signos">
+            ?`<div class="signos">
                 <button class="signo-btn ${signo==='1'?'sel-1':''}" onclick="setResSigno(${fi},${pi},'1')">1</button>
                 <button class="signo-btn ${signo==='X'?'sel-X':''}" onclick="setResSigno(${fi},${pi},'X')">X</button>
                 <button class="signo-btn ${signo==='2'?'sel-2':''}" onclick="setResSigno(${fi},${pi},'2')">2</button>
                </div>`
-            : `<div class="score-wrap">
+            :`<div class="score-wrap">
                 <input class="score-inp" type="number" min="0" value="${res.gl}" placeholder="-" onchange="setResExacto(${fi},${pi},'gl',this.value)"/>
                 <span style="color:var(--c-text3)">-</span>
                 <input class="score-inp" type="number" min="0" value="${res.gv}" placeholder="-" onchange="setResExacto(${fi},${pi},'gv',this.value)"/>
-               </div>${signo?`<div style="text-align:center;margin-top:4px"><span class="badge ${signo==='1'?'badge-green':signo==='X'?'badge-amber':'badge-red'}">${signo==='1'?'Local':'Empate'==='X'?'Empate':'Visita'}</span></div>`:''}`}
+               </div>${signo?`<div style="text-align:center;margin-top:4px"><span class="badge ${signo==='1'?'badge-green':signo==='X'?'badge-amber':'badge-red'}">${signo==='1'?'Local gana':signo==='X'?'Empate':'Visita gana'}</span></div>`:''}`}
         </div>`;
       }).join('')}
     </div>`).join('');
 }
-window.setResSigno = async function(fi,pi,signo) {
-  const t=T(); if(!t) return;
-  const res = JSON.parse(JSON.stringify(t.resultados||{}));
-  const k = `${fi}-${pi}-signo`;
-  res[k] = res[k]===signo?'':signo;
-  await fupd(`torneos/${S.torneoActivo}`, {resultados:res});
+window.setResSigno=async function(fi,pi,signo){
+  const t=T();if(!t)return;
+  const res=JSON.parse(JSON.stringify(t.resultados||{}));
+  const k=`${fi}-${pi}-signo`;res[k]=res[k]===signo?'':signo;
+  await fupd(`torneos/${S.torneoActivo}`,{resultados:res});
 };
-window.setResExacto = async function(fi,pi,campo,val) {
-  const t=T(); if(!t) return;
-  const res = JSON.parse(JSON.stringify(t.resultados||{}));
-  const key = `${fi}-${pi}`;
-  if(!res[key]) res[key]={gl:'',gv:''};
+window.setResExacto=async function(fi,pi,campo,val){
+  const t=T();if(!t)return;
+  const res=JSON.parse(JSON.stringify(t.resultados||{}));
+  const key=`${fi}-${pi}`;if(!res[key])res[key]={gl:'',gv:''};
   res[key][campo]=val;
   const r=res[key];
-  if(r.gl!==''&&r.gv!==''){const l=parseInt(r.gl),v=parseInt(r.gv);res[`${fi}-${pi}-signo`]=l>v?'1':l===v?'X':'2';}
-  await fupd(`torneos/${S.torneoActivo}`, {resultados:res});
+  if(r.gl!==''&&r.gv!==''){const l=parseInt(r.gl),vv=parseInt(r.gv);res[`${fi}-${pi}-signo`]=l>vv?'1':l===vv?'X':'2';}
+  await fupd(`torneos/${S.torneoActivo}`,{resultados:res});
 };
 
 // ─────────────────────────────────────────────────────────────
 // TAB PRONÓSTICOS
 // ─────────────────────────────────────────────────────────────
-function renderTabPronosticos(el) {
-  const t = T(); if (!t) return;
-  const m = meta();
-  const fechas = t.fechas||[];
-  const isAdmin = S.rol==='admin';
-  let fi = parseInt(el.dataset.fi||'0');
-  if (fi>=fechas.length) fi=0;
-  if (!fechas.length) { el.innerHTML='<p class="sub" style="margin-top:4px">No hay fechas.</p>'; return; }
-  const f = fechas[fi];
-  el.dataset.fi = fi;
-
-  // Participantes a mostrar: admin ve todos, participante solo se ve a sí mismo
-  const uidsAMostrar = isAdmin ? partsT() : partsT().filter(u=>u===S.uid);
-
-  el.innerHTML = `
+function renderTabPronosticos(el){
+  const t=T();if(!t)return;const m=meta();const fechas=t.fechas||[];
+  const isAdmin=S.rol==='admin';
+  let fi=parseInt(el.dataset.fi||'0');if(fi>=fechas.length)fi=0;
+  if(!fechas.length){el.innerHTML='<p class="sub" style="margin-top:4px">No hay fechas.</p>';return;}
+  const f=fechas[fi];el.dataset.fi=fi;
+  const uids=isAdmin?partsT():partsT().filter(u=>u===S.uid);
+  el.innerHTML=`
     <div class="row" style="margin-top:4px">
       <label style="font-size:12px;white-space:nowrap">Fecha:</label>
       <select onchange="cambiarFechaPron(this.value)" style="max-width:200px">
         ${fechas.map((f,i)=>`<option value="${i}" ${i===fi?'selected':''}>${f.nombre}</option>`).join('')}
       </select>
     </div>
-    ${!(f.partidos||[]).length ? '<p class="sub">Sin partidos en esta fecha.</p>' :
-    uidsAMostrar.map(uid=>{
-      const aus = ausente(fi,uid);
-      const p = allParts()[uid] || {};
-      const nombreCompleto = p.nombre ? `${p.nombre} ${p.apellido}` : uid;
-      let totalPts = null;
-      const bloques = (f.partidos||[]).map((pt,pi)=>{
-        const pts = calcPuntos(fi,pi,uid,t,m);
-        if (pts!==null) totalPts=(totalPts||0)+pts;
-        const signo = t.pronosticos?.[`${fi}-${pi}-${uid}-signo`]||'';
-        const pron  = t.pronosticos?.[`${fi}-${pi}-${uid}`]||{gl:'',gv:''};
-        // Solo el propio participante (o admin) puede editar
-        const editable = isAdmin || uid===S.uid;
-        return `<div class="partido-block">
+    ${!(f.partidos||[]).length?'<p class="sub">Sin partidos.</p>':uids.map(uid=>{
+      const aus=ausente(fi,uid);
+      const p=allParts()[uid]||{};
+      const nombre=p.nombre?`${p.nombre} ${p.apellido}`:uid;
+      let totalPts=null;
+      const bloques=(f.partidos||[]).map((pt,pi)=>{
+        const pts=calcPuntos(fi,pi,uid,t,m);
+        if(pts!==null)totalPts=(totalPts||0)+pts;
+        const signo=t.pronosticos?.[`${fi}-${pi}-${uid}-signo`]||'';
+        const pron=t.pronosticos?.[`${fi}-${pi}-${uid}`]||{gl:'',gv:''};
+        const editable=isAdmin||uid===S.uid;
+        return`<div class="partido-block">
           <div class="partido-header">
             <div class="team-name" style="font-size:11px">${pt.local}</div>
             <div class="vs-label">vs</div>
             <div class="team-name" style="font-size:11px">${pt.visita}</div>
           </div>
           ${m.sistema==='1x2'
-            ? `<div class="signos">
+            ?`<div class="signos">
                 <button class="signo-btn ${signo==='1'?'sel-1':''}" ${!editable?'disabled':''} onclick="setPronSigno(${fi},${pi},'${uid}','1')">1</button>
                 <button class="signo-btn ${signo==='X'?'sel-X':''}" ${!editable?'disabled':''} onclick="setPronSigno(${fi},${pi},'${uid}','X')">X</button>
                 <button class="signo-btn ${signo==='2'?'sel-2':''}" ${!editable?'disabled':''} onclick="setPronSigno(${fi},${pi},'${uid}','2')">2</button>
                </div>`
-            : `<div class="score-wrap">
+            :`<div class="score-wrap">
                 <input class="score-inp" type="number" min="0" value="${pron.gl}" placeholder="-" ${!editable?'readonly':''} onchange="setPronExacto(${fi},${pi},'${uid}','gl',this.value)"/>
                 <span style="color:var(--c-text3)">-</span>
                 <input class="score-inp" type="number" min="0" value="${pron.gv}" placeholder="-" ${!editable?'readonly':''} onchange="setPronExacto(${fi},${pi},'${uid}','gv',this.value)"/>
@@ -768,50 +808,45 @@ function renderTabPronosticos(el) {
           ${pts!==null?`<div style="text-align:center;margin-top:5px"><span class="badge ${pts>0?'badge-green':'badge-red'}">${pts} pt${pts!==1?'s':''}</span></div>`:''}
         </div>`;
       }).join('');
-      return `<div class="card" ${aus?'style="opacity:.55"':''}>
+      return`<div class="card" ${aus?'style="opacity:.55"':''}>
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-          <p style="font-weight:500;font-size:13px">${nombreCompleto}</p>
+          <p style="font-weight:500;font-size:13px">${nombre}</p>
           ${isAdmin?`<button class="ausencia-toggle ${aus?'ausente':''}" onclick="toggleAusencia(${fi},'${uid}')">${aus?'⛔ No juega':'✓ Juega'}</button>`:''}
         </div>
-        ${aus
-          ? '<p style="font-size:12px;color:var(--c-text2);text-align:center;padding:6px 0">No juega en esta fecha</p>'
-          : bloques+(totalPts!==null?`<div style="text-align:right;font-size:11px;color:var(--c-text2);margin-top:4px">Total fecha: <strong>${totalPts} pts</strong></div>`:'')}
+        ${aus?'<p style="font-size:12px;color:var(--c-text2);text-align:center;padding:6px 0">No juega en esta fecha</p>'
+          :bloques+(totalPts!==null?`<div style="text-align:right;font-size:11px;color:var(--c-text2);margin-top:4px">Total fecha: <strong>${totalPts} pts</strong></div>`:'')}
       </div>`;
     }).join('')}`;
 }
-window.cambiarFechaPron = function(fi) {
-  const el=document.getElementById('tab-content'); el.dataset.fi=fi; renderTab('pronosticos');
-};
-window.setPronSigno = async function(fi,pi,uid,signo) {
-  const t=T(); if(!t) return;
+window.cambiarFechaPron=function(fi){const el=document.getElementById('tab-content');el.dataset.fi=fi;renderTab('pronosticos');};
+window.setPronSigno=async function(fi,pi,uid,signo){
+  const t=T();if(!t)return;
   const prons=JSON.parse(JSON.stringify(t.pronosticos||{}));
-  const k=`${fi}-${pi}-${uid}-signo`;
-  prons[k]=prons[k]===signo?'':signo;
+  const k=`${fi}-${pi}-${uid}-signo`;prons[k]=prons[k]===signo?'':signo;
   await fupd(`torneos/${S.torneoActivo}`,{pronosticos:prons});
 };
-window.setPronExacto = async function(fi,pi,uid,campo,val) {
-  const t=T(); if(!t) return;
+window.setPronExacto=async function(fi,pi,uid,campo,val){
+  const t=T();if(!t)return;
   const prons=JSON.parse(JSON.stringify(t.pronosticos||{}));
-  const key=`${fi}-${pi}-${uid}`;
-  if(!prons[key]) prons[key]={gl:'',gv:''};
+  const key=`${fi}-${pi}-${uid}`;if(!prons[key])prons[key]={gl:'',gv:''};
   prons[key][campo]=val;
   const p=prons[key];
-  if(p.gl!==''&&p.gv!==''){const l=parseInt(p.gl),v=parseInt(p.gv);prons[`${fi}-${pi}-${uid}-signo`]=l>v?'1':l===v?'X':'2';}
+  if(p.gl!==''&&p.gv!==''){const l=parseInt(p.gl),vv=parseInt(p.gv);prons[`${fi}-${pi}-${uid}-signo`]=l>vv?'1':l===vv?'X':'2';}
   await fupd(`torneos/${S.torneoActivo}`,{pronosticos:prons});
 };
-window.toggleAusencia = async function(fi,uid) {
-  const t=T(); if(!t) return;
+window.toggleAusencia=async function(fi,uid){
+  const t=T();if(!t)return;
   const aus=JSON.parse(JSON.stringify(t.ausencias||{}));
-  const k=`${fi}-${uid}`; aus[k]=!aus[k];
+  const k=`${fi}-${uid}`;aus[k]=!aus[k];
   await fupd(`torneos/${S.torneoActivo}`,{ausencias:aus});
 };
 
 // ─────────────────────────────────────────────────────────────
-// TAB PAGOS (admin)
+// TAB PAGOS
 // ─────────────────────────────────────────────────────────────
-function renderTabPagos(el) {
-  const t=T(); if(!t) return;
-  const uids=partsT(); const fechas=t.fechas||[];
+function renderTabPagos(el){
+  const t=T();if(!t)return;
+  const uids=partsT();const fechas=t.fechas||[];
   if(!uids.length||!fechas.length){el.innerHTML='<p class="sub" style="margin-top:4px">Configurá fechas y participantes primero.</p>';return;}
   const cuota=t.cuota||500;
   el.innerHTML=`
@@ -829,23 +864,22 @@ function renderTabPagos(el) {
         const celdas=fechas.map((_,fi)=>{
           const aus=ausente(fi,uid);
           const pago=t.pagos?.[`${uid}-${fi}`]||0;
-          if(!aus) debe+=cuota;
-          pagado+=pago;
-          if(aus) return `<td><span class="badge badge-gray">No juega</span></td>`;
+          if(!aus)debe+=cuota;pagado+=pago;
+          if(aus)return`<td><span class="badge badge-gray">No juega</span></td>`;
           const diff=pago-cuota;
-          return `<td><div style="display:flex;gap:3px;align-items:center">
+          return`<td><div style="display:flex;gap:3px;align-items:center">
             <input type="number" min="0" step="100" value="${pago}" style="width:62px;padding:3px 5px;font-size:12px;border:1px solid var(--c-border);border-radius:6px;background:var(--c-bg);color:var(--c-text)" onchange="savePago('${uid}',${fi},this.value)"/>
             ${diff===0?'<span class="badge badge-green">OK</span>':diff>0?`<span class="badge badge-amber">+${diff}</span>`:`<span class="badge badge-red">${diff}</span>`}
           </div></td>`;
         }).join('');
         const saldo=pagado-debe;
-        return `<tr><td style="font-weight:500;white-space:nowrap">${nombre}</td>${celdas}
+        return`<tr><td style="font-weight:500;white-space:nowrap">${nombre}</td>${celdas}
           <td>$${debe.toLocaleString()}</td><td>$${pagado.toLocaleString()}</td>
           <td><span class="badge ${saldo>=0?'badge-green':'badge-red'}">${saldo>=0?'+':''}$${saldo.toLocaleString()}</span></td></tr>`;
       }).join('')}</tbody>
     </table></div>`;
 }
-window.saveCuota=async function(v){await fupd(`torneos/${S.torneoActivo}`,{cuota:parseFloat(v)||500});};
+window.saveCuota=async function(val){await fupd(`torneos/${S.torneoActivo}`,{cuota:parseFloat(val)||500});};
 window.savePago=async function(uid,fi,val){
   const t=T();if(!t)return;
   const pagos=JSON.parse(JSON.stringify(t.pagos||{}));
@@ -854,16 +888,15 @@ window.savePago=async function(uid,fi,val){
 };
 
 // ─────────────────────────────────────────────────────────────
-// TAB PREMIOS (admin)
+// TAB PREMIOS
 // ─────────────────────────────────────────────────────────────
-function renderTabPremios(el) {
-  const t=T();if(!t)return;
-  const c=t.premiosCfg||{};
+function renderTabPremios(el){
+  const t=T();if(!t)return;const c=t.premiosCfg||{};
   el.innerHTML=`
     <div class="card" style="margin-top:4px">
       <p style="font-size:13px;font-weight:500;margin-bottom:7px">Premio por fecha (pozo acumulado)</p>
       <div class="row"><label class="lbl">Monto base:</label><input id="pfm" type="number" min="0" value="${c.montoFecha||0}"/><span style="font-size:12px;color:var(--c-text2)">$/fecha</span></div>
-      <p style="font-size:11px;color:var(--c-text2);margin-bottom:7px">Si nadie gana, el pozo pasa a la siguiente fecha. En empate se divide.</p>
+      <p style="font-size:11px;color:var(--c-text2);margin-bottom:7px">Si nadie gana, el pozo pasa a la siguiente. En empate se divide.</p>
       <div class="row"><label class="lbl">Condición:</label>
         <select id="pcond">
           <option value="max_puntos" ${!c.condicion||c.condicion==='max_puntos'?'selected':''}>Mayor puntaje en la fecha</option>
@@ -883,7 +916,8 @@ function renderTabPremios(el) {
 }
 window.guardarPremios=async function(){
   const cfg={montoFecha:parseFloat(document.getElementById('pfm').value)||0,condicion:document.getElementById('pcond').value,
-    premio1:parseFloat(document.getElementById('pm1').value)||0,premio2:parseFloat(document.getElementById('pm2').value)||0,premio3:parseFloat(document.getElementById('pm3').value)||0};
+    premio1:parseFloat(document.getElementById('pm1').value)||0,premio2:parseFloat(document.getElementById('pm2').value)||0,
+    premio3:parseFloat(document.getElementById('pm3').value)||0};
   await fupd(`torneos/${S.torneoActivo}`,{premiosCfg:cfg});
   document.getElementById('premios-resumen').innerHTML=premiosResumenHTML();
 };
@@ -892,13 +926,13 @@ function premiosResumenHTML(){
   const pozos=calcPozos(t,m,c);
   let html=pozos.map(p=>{
     if(p.estado==='pendiente')return`<div class="pozo-row pozo-pendiente"><span>${p.nombre}</span><span style="font-size:11px">Sin resultados — pozo: $${p.pozoDeFecha.toLocaleString()}</span></div>`;
-    if(p.estado==='acumulado')return`<div class="pozo-row pozo-acum"><span>${p.nombre} — ACUMULADO</span><span style="font-size:11px">$${p.pozoDeFecha.toLocaleString()} pasa a la siguiente</span></div>`;
+    if(p.estado==='acumulado')return`<div class="pozo-row pozo-acum"><span>${p.nombre} — ACUMULADO</span><span style="font-size:11px">$${p.pozoDeFecha.toLocaleString()} → siguiente</span></div>`;
     const emp=p.ganadores.length>1?` (÷${p.ganadores.length})`:'';
     return`<div class="pozo-row pozo-ganado"><span>${p.nombre} — ${p.ganadores.map(nombrePart).join(' y ')}</span><span style="font-size:11px">$${p.pozoDeFecha.toLocaleString()}${emp} → $${Math.round(p.premioPorGanador).toLocaleString()} c/u</span></div>`;
   }).join('')||'<p class="sub">Sin fechas.</p>';
   const ranking=partsT().map(uid=>({uid,nombre:nombrePart(uid),pts:totalGeneral(uid,t,m)})).sort((a,b)=>b.pts-a.pts);
   if(ranking.length){
-    html+='<table style="margin-top:8px"><thead><tr><th>Puesto</th><th>Participante</th><th>Puntos</th><th>Premio</th></tr></thead><tbody>';
+    html+='<table style="margin-top:8px"><thead><tr><th>Puesto</th><th>Participante</th><th>Pts</th><th>Premio</th></tr></thead><tbody>';
     ranking.forEach((r,i)=>{const pr=i===0?c.premio1:i===1?c.premio2:i===2?c.premio3:0;html+=`<tr><td>${i+1}°</td><td>${r.nombre}</td><td>${r.pts}</td><td>${pr>0?'$'+(pr||0).toLocaleString():'-'}</td></tr>`;});
     html+='</tbody></table>';
   }
@@ -908,15 +942,13 @@ function premiosResumenHTML(){
 // ─────────────────────────────────────────────────────────────
 // TAB POSICIONES
 // ─────────────────────────────────────────────────────────────
-function renderTabPosiciones(el) {
+function renderTabPosiciones(el){
   const t=T();if(!t)return;const m=meta();
-  const uids=partsT();
+  const uids=partsT();const isAdmin=S.rol==='admin';
   const ranking=uids.map(uid=>({uid,nombre:nombrePart(uid),pts:totalGeneral(uid,t,m)})).sort((a,b)=>b.pts-a.pts);
   const cuota=t.cuota||500;
-  const isAdmin=S.rol==='admin';
   const totalRec=uids.reduce((s,uid)=>(t.fechas||[]).reduce((ss,_,fi)=>ss+(t.pagos?.[`${uid}-${fi}`]||0),s),0);
   const deudores=uids.filter(uid=>(t.fechas||[]).some((_,fi)=>!ausente(fi,uid)&&(t.pagos?.[`${uid}-${fi}`]||0)<cuota)).length;
-
   el.innerHTML=`
     <div class="metrics-grid" style="margin-top:4px">
       <div class="metric"><div class="metric-val">${uids.length}</div><div class="metric-lbl">Participantes</div></div>
@@ -924,14 +956,13 @@ function renderTabPosiciones(el) {
       ${isAdmin?`<div class="metric"><div class="metric-val">$${totalRec.toLocaleString()}</div><div class="metric-lbl">Recaudado</div></div>
       <div class="metric"><div class="metric-val">${deudores}</div><div class="metric-lbl">Con deuda</div></div>`:''}
     </div>
-    ${!ranking.length?'<p class="sub">Sin participantes asignados.</p>':`
+    ${!ranking.length?'<p class="sub">Sin participantes.</p>':`
     <div style="overflow-x:auto"><table>
       <thead><tr><th>#</th><th>Participante</th><th>Total</th>${(t.fechas||[]).map(f=>`<th style="white-space:nowrap">${f.nombre}</th>`).join('')}${isAdmin?'<th>Pagos</th>':''}</tr></thead>
       <tbody>${ranking.map((r,i)=>{
         const pagado=(t.fechas||[]).reduce((s,_,fi)=>s+(t.pagos?.[`${r.uid}-${fi}`]||0),0);
         const debe=(t.fechas||[]).reduce((s,_,fi)=>s+(ausente(fi,r.uid)?0:cuota),0);
-        const saldo=pagado-debe;
-        const esMio=r.uid===S.uid;
+        const saldo=pagado-debe;const esMio=r.uid===S.uid;
         return`<tr ${esMio?'style="background:var(--c-info-bg)"':''}>
           <td>${i+1}</td>
           <td style="font-weight:${i<3?'500':'400'};white-space:nowrap">${i===0?'🥇 ':i===1?'🥈 ':i===2?'🥉 ':''}${r.nombre}${esMio?' ⬅':''}</td>
@@ -964,7 +995,6 @@ function totalFecha(fi,uid,t,m){
   return hay?tot:null;
 }
 function totalGeneral(uid,t,m){return(t.fechas||[]).reduce((s,_,fi)=>s+(totalFecha(fi,uid,t,m)||0),0);}
-
 function calcPozos(t,m,c){
   const condicion=c.condicion||'max_puntos';const montoBase=c.montoFecha||0;
   let pozos=[],acumulado=0;
@@ -986,37 +1016,12 @@ function calcPozos(t,m,c){
 }
 
 // ─────────────────────────────────────────────────────────────
-// HELPERS
+// UTILS
 // ─────────────────────────────────────────────────────────────
-function showMsg(id,msg,isError){const el=document.getElementById(id);if(!el)return;el.textContent=msg;el.style.color=isError?'var(--c-danger)':'var(--c-success)';el.style.display='';}
-function showApp(html){document.getElementById('app').innerHTML=html;}
-
-// Vincular participante pendiente cuando hace login
-onAuthStateChanged(auth, async user => {
-  if (!user) return;
-  const cfgData = await fget('config/global');
-  if (!cfgData) return;
-  const parts = cfgData.participantes || {};
-  const email = user.email;
-  // Buscar si hay un registro pendiente con ese mail
-  const pendingEntry = Object.entries(parts).find(([uid,p])=>p.pendiente&&p.mail===email);
-  if (pendingEntry) {
-    const [tempId, perfil] = pendingEntry;
-    const newParts = {...parts};
-    delete newParts[tempId];
-    newParts[user.uid] = {...perfil, uid: user.uid, pendiente: false};
-    // Migrar participante en todos los torneos
-    const ts = cfgData.torneos || [];
-    for (const t of ts) {
-      const td = await fget(`torneos/${t.id}`);
-      if (td && (td.participantes||[]).includes(tempId)) {
-        const newList = td.participantes.map(u=>u===tempId?user.uid:u);
-        await fupd(`torneos/${t.id}`, {participantes: newList});
-      }
-    }
-    await fset('config/global', {participantes: newParts});
-  }
-});
+function v(id){const el=document.getElementById(id);return el?el.value.trim():'';}
+function msg(id,text,isError){const el=document.getElementById(id);if(!el)return;el.textContent=text;el.style.color=isError?'var(--c-danger)':'var(--c-success)';}
+function setApp(html){document.getElementById('app').innerHTML=html;}
+function loadingHTML(txt='Cargando...'){return`<div style="display:flex;align-items:center;justify-content:center;height:100vh;color:var(--c-text3);font-size:13px">${txt}</div>`;}
 </script>
 
 <style>
@@ -1043,7 +1048,7 @@ html,body,#app{height:100%;font-family:-apple-system,BlinkMacSystemFont,'Segoe U
 .login-logo{font-size:42px;text-align:center;margin-bottom:8px}
 .login-title{font-size:22px;font-weight:600;text-align:center;margin-bottom:4px}
 .login-sub{font-size:13px;color:var(--c-text2);text-align:center;margin-bottom:20px}
-.login-input{width:100%;padding:9px 12px;border:1px solid var(--c-border);border-radius:8px;font-size:14px;background:var(--c-bg);color:var(--c-text);margin-bottom:0}
+.login-input{width:100%;padding:9px 12px;border:1px solid var(--c-border);border-radius:8px;font-size:14px;background:var(--c-bg);color:var(--c-text)}
 .login-input:focus{outline:none;border-color:var(--c-info)}
 .login-divider{text-align:center;color:var(--c-text3);font-size:12px;margin:14px 0;position:relative}
 .login-divider::before,.login-divider::after{content:'';position:absolute;top:50%;width:40%;height:1px;background:var(--c-border)}
@@ -1051,17 +1056,17 @@ html,body,#app{height:100%;font-family:-apple-system,BlinkMacSystemFont,'Segoe U
 .btn-google{width:100%;padding:10px;border:1px solid var(--c-border);border-radius:8px;cursor:pointer;font-size:14px;background:var(--c-bg);color:var(--c-text);display:flex;align-items:center;justify-content:center;gap:10px;font-weight:500}
 .btn-google:hover{background:var(--c-bg2)}
 .layout{display:grid;grid-template-columns:210px 1fr;height:100vh;overflow:hidden}
-@media(max-width:580px){.layout{grid-template-columns:1fr;grid-template-rows:auto 1fr}}
+@media(max-width:600px){.layout{grid-template-columns:1fr;grid-template-rows:auto 1fr}}
 .sidebar{border-right:1px solid var(--c-border);padding:8px;overflow-y:auto;display:flex;flex-direction:column;gap:2px;background:var(--c-bg2)}
 .sidebar-header{display:flex;align-items:center;gap:8px;padding:8px 6px 12px;border-bottom:1px solid var(--c-border);margin-bottom:4px}
 .sidebar-logo{font-size:22px}
 .sidebar-section{font-size:10px;color:var(--c-text3);padding:8px 6px 3px;text-transform:uppercase;letter-spacing:.06em}
-.nav-item{padding:7px 10px;border-radius:8px;cursor:pointer;font-size:13px;color:var(--c-text2);display:flex;justify-content:space-between;align-items:center;gap:6px}
+.nav-item{padding:7px 10px;border-radius:8px;cursor:pointer;font-size:13px;color:var(--c-text2);display:flex;align-items:center;gap:6px}
 .nav-item:hover{background:var(--c-border)}
 .nav-item.active{background:var(--c-info-bg);color:var(--c-info);font-weight:500}
 .nav-add{padding:6px 10px;border-radius:8px;cursor:pointer;font-size:12px;color:var(--c-info);border:1px dashed var(--c-info-border);text-align:center;margin-top:4px}
 .nav-add:hover{background:var(--c-info-bg)}
-.t-badge{font-size:10px;padding:1px 6px;border-radius:8px;background:var(--c-border);color:var(--c-text3);white-space:nowrap}
+.t-badge{font-size:10px;padding:1px 6px;border-radius:8px;background:var(--c-border);color:var(--c-text3);white-space:nowrap;margin-left:auto}
 .nav-item.active .t-badge{background:var(--c-info-border);color:var(--c-info)}
 .content{overflow-y:auto;padding:16px}
 .empty-state{padding:60px 20px;text-align:center;color:var(--c-text3);font-size:13px}
@@ -1104,8 +1109,8 @@ td{padding:6px 8px;border-bottom:1px solid var(--c-border)}
 .vs-label{font-size:10px;color:var(--c-text3);text-align:center}
 .signos{display:flex;gap:6px;justify-content:center}
 .signo-btn{width:38px;height:32px;border:2px solid var(--c-border);border-radius:8px;cursor:pointer;font-size:14px;font-weight:700;background:var(--c-bg2);color:var(--c-text3);transition:all .1s}
-.signo-btn:hover{background:var(--c-border)}
-.signo-btn:disabled{cursor:not-allowed;opacity:.4}
+.signo-btn:hover:not(:disabled){background:var(--c-border)}
+.signo-btn:disabled{cursor:not-allowed;opacity:.35}
 .signo-btn.sel-1{background:var(--c-info-bg)!important;color:var(--c-info)!important;border-color:var(--c-info)!important}
 .signo-btn.sel-X{background:var(--c-warn-bg)!important;color:var(--c-warn)!important;border-color:var(--c-warn)!important}
 .signo-btn.sel-2{background:var(--c-danger-bg)!important;color:var(--c-danger)!important;border-color:var(--c-danger)!important}
@@ -1113,6 +1118,10 @@ td{padding:6px 8px;border-bottom:1px solid var(--c-border)}
 .score-inp{width:40px;text-align:center;padding:4px;font-size:14px;font-weight:500;flex:none}
 .part-check-row{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-radius:8px;border:1px solid var(--c-border);margin-bottom:5px;gap:8px}
 .part-check-row.assigned{border-color:var(--c-info-border);background:var(--c-info-bg)}
+/* Fila de participante en lista global */
+.part-row{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-radius:8px;border:1px solid var(--c-border);margin-bottom:5px;gap:8px;flex-wrap:wrap}
+.part-info{display:flex;flex-direction:column;gap:2px;font-size:13px}
+.part-info span{font-size:11px;color:var(--c-text2)}
 .ausencia-toggle{padding:3px 9px;border-radius:10px;font-size:11px;border:1px solid var(--c-border);cursor:pointer;background:var(--c-bg2);color:var(--c-text2)}
 .ausencia-toggle.ausente{background:var(--c-warn-bg);color:var(--c-warn);border-color:var(--c-warn-border)}
 .pozo-row{display:flex;justify-content:space-between;align-items:center;padding:6px 10px;border-radius:8px;margin-bottom:5px;font-size:12px;gap:8px}
@@ -1121,5 +1130,5 @@ td{padding:6px 8px;border-bottom:1px solid var(--c-border)}
 .pozo-pendiente{background:var(--c-bg2);border:1px solid var(--c-border);color:var(--c-text2)}
 code{background:var(--c-bg2);padding:2px 6px;border-radius:4px;font-size:11px;border:1px solid var(--c-border)}
 </style>
-<body><div id="app"><div style="display:flex;align-items:center;justify-content:center;height:100vh;color:#aaa;font-size:13px">Cargando...</div></div></body>
+<body><div id="app"></div></body>
 </html>
