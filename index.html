@@ -4,6 +4,8 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>Prode Fútbol</title>
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
+<script>emailjs.init("U2WEI7n55MviI334I");</script>
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { getFirestore, doc, collection, getDoc, setDoc, updateDoc, onSnapshot }
@@ -12,21 +14,18 @@ import { getAuth, onAuthStateChanged, signOut, GoogleAuthProvider, signInWithPop
   sendSignInLinkToEmail, isSignInWithEmailLink, signInWithEmailLink }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
-// ─────────────────────────────────────────────────────────────
-// 🔧 REEMPLAZÁ CON TU CONFIGURACIÓN DE FIREBASE
-// ─────────────────────────────────────────────────────────────
-// Your web app's Firebase configuration
-  // For Firebase JS SDK v7.20.0 and later, measurementId is optional
-  const firebaseConfig = {
-    apiKey: "AIzaSyAiKaY0oqwq1vijs-VzzqSOnZRYkraYZqM",
-    authDomain: "prode-futbol-d1109.firebaseapp.com",
-    projectId: "prode-futbol-d1109",
-    storageBucket: "prode-futbol-d1109.firebasestorage.app",
-    messagingSenderId: "993506133499",
-    appId: "1:993506133499:web:d633a047b97a888568375e",
-    measurementId: "G-7R74H757MB"
-  };
-// ─────────────────────────────────────────────────────────────
+// 🔧 CONFIGURACIÓN FIREBASE
+const firebaseConfig = {
+  apiKey:            "AIzaSyAiKaY0oqwq1vijs-VzzqSOnZRYkraYZqM",
+  authDomain:        "prode-futbol-d1109.firebaseapp.com",
+  projectId:         "prode-futbol-d1109",
+  storageBucket:     "prode-futbol-d1109.firebasestorage.app",
+  messagingSenderId: "993506133499",
+  appId:             "1:993506133499:web:d633a047b97a888568375e",
+  measurementId:     "G-7R74H757MB"
+};
+const APP_URL = "https://rocasports.github.io/futbol-prode";
+window.APP_URL = APP_URL;
 
 const app=initializeApp(firebaseConfig);
 const db=getFirestore(app);
@@ -98,17 +97,38 @@ async function handleUserLogin(user){
 
 async function startApp(){
   renderShell();
-  flisten('config/global',data=>{
+  flisten('config/global',async data=>{
     S.data.config=data||{admins:[],participantes:{},torneos:[]};
     S.perfil=(data?.participantes||{})[S.uid]||null;
-    renderTorneosNav();suscribirTorneos();
+    // FIX 3: si el participante fue aprobado en tiempo real, refrescar sesión
+    if(S.rol==='participante'){
+      const miPerfil=(data?.participantes||{})[S.uid];
+      if(!miPerfil||miPerfil.estado==='pendiente_aprobacion'){
+        // Todavía pendiente, mostrar pantalla de espera actualizada
+        renderEspera(miPerfil||{nombre:''});return;
+      }
+      if(miPerfil.estado==='rechazado'){renderRechazado();return;}
+    }
+    suscribirTorneos();
+    renderTorneosNav();
     if(S.torneoActivo)refreshTorneoView();
     badgePend();
+    // FIX 1: Si el nav de torneos está vacío porque los datos aún no llegaron, esperar
+    if(!S.data.torneos||Object.keys(S.data.torneos).length===0){
+      setTimeout(()=>{renderTorneosNav();},800);
+    }
   });
 }
 function suscribirTorneos(){
   torneos().forEach(t=>{
-    if(!S.data.torneos[t.id]){S.data.torneos[t.id]={};flisten(`torneos/${t.id}`,data=>{S.data.torneos[t.id]=data||{};if(S.torneoActivo===t.id)refreshTorneoView();});}
+    if(!S.data.torneos[t.id]){
+      S.data.torneos[t.id]={};
+      flisten(`torneos/${t.id}`,data=>{
+        S.data.torneos[t.id]=data||{};
+        renderTorneosNav(); // FIX 1: actualizar nav cuando llegan datos del torneo
+        if(S.torneoActivo===t.id)refreshTorneoView();
+      });
+    }
   });
 }
 
@@ -259,7 +279,31 @@ window.addPartManual=async function(){
   await fset('config/global',{participantes:{[tempId]:{nombre,apellido,dni,cel,mail,uid:tempId,estado:'pendiente_login'}}});
   smsg('part-msg','✅ Cargado');['pn','pa','pd','pc','pm'].forEach(id=>document.getElementById(id).value='');
 };
-window.aprobarP=async function(uid){const p=JSON.parse(JSON.stringify(allParts()));if(p[uid])p[uid].estado='activo';await fset('config/global',{participantes:p});};
+window.aprobarP=async function(uid){
+  const p=JSON.parse(JSON.stringify(allParts()));
+  if(p[uid])p[uid].estado='activo';
+  await fset('config/global',{participantes:p});
+  // FIX 3: forzar re-render inmediato sin esperar el listener
+  S.data.config.participantes=p;
+  const content=document.getElementById('content');
+  if(content&&content.innerHTML.includes('Pendientes de aprobación'))renderViewParts(content);
+  // 📧 Enviar email de aprobación
+  emailAprobacion(p[uid]);
+};
+async function emailAprobacion(perfil){
+  try{
+    await emailjs.send('service_fx6581p','template_hh5r6hr',{
+      nombre: perfil.nombre,
+      apellido: perfil.apellido,
+      mail: perfil.mail,
+      app_url: APP_URL,
+    });
+    console.log('Email de aprobación enviado a', perfil.mail);
+  } catch(e){
+    console.warn('No se pudo enviar el email de aprobación:', e);
+  }
+}
+
 window.rechazarP=async function(uid){const p=JSON.parse(JSON.stringify(allParts()));if(p[uid])p[uid].estado='rechazado';await fset('config/global',{participantes:p});};
 window.desactivarP=async function(uid){if(!confirm('¿Desactivar?'))return;const p=JSON.parse(JSON.stringify(allParts()));if(p[uid])p[uid].estado='rechazado';await fset('config/global',{participantes:p});};
 window.eliminarP=async function(uid){if(!confirm('¿Eliminar?'))return;const p=JSON.parse(JSON.stringify(allParts()));delete p[uid];await fset('config/global',{participantes:p});};
@@ -530,27 +574,44 @@ window.cambiarFP=function(fi){const el=document.getElementById('tab-content');if
 window.toggleAus=async function(fi,uid){const t=T();if(!t)return;const aus=JSON.parse(JSON.stringify(t.ausencias||{}));const k=`${fi}-${uid}`;aus[k]=!aus[k];await fupd(`torneos/${S.torneoActivo}`,{ausencias:aus});};
 
 // ── TAB PAGOS ────────────────────────────────────────────────
+function cuotaFecha(fi){const t=T();if(!t)return 0;return t.cuotasFecha?.[fi]??t.cuota??500;}
 function rtPagos(el){
   const t=T();if(!t)return;const uids=partsT();const fechas=t.fechas||[];
   if(!uids.length||!fechas.length){el.innerHTML='<p class="sub" style="margin-top:4px">Configurá fechas y participantes primero.</p>';return;}
-  const cuota=t.cuota||500;
-  el.innerHTML=`<div class="row" style="margin-top:4px"><label style="font-size:12px;white-space:nowrap">Cuota por fecha:</label><input id="cuota-monto" type="number" min="0" step="100" value="${cuota}" style="max-width:80px" onchange="saveCuota(this.value)"/><span style="font-size:12px;color:var(--c-text2)">$</span></div>
-    <div style="overflow-x:auto"><table><thead><tr><th>Participante</th>${fechas.map(f=>`<th>${f.nombre}</th>`).join('')}<th>Debe</th><th>Pagado</th><th>Saldo</th></tr></thead>
+  const cuotaBase=t.cuota||500;
+  // Encabezado con cuota editable por fecha
+  const headerCuotas=fechas.map((f,fi)=>`<th><div style="font-size:11px;font-weight:500">${f.nombre}</div><div style="display:flex;gap:3px;align-items:center;margin-top:3px"><span style="font-size:10px;color:var(--c-text2)">$</span><input type="number" min="0" step="100" value="${cuotaFecha(fi)}" style="width:58px;padding:2px 4px;font-size:11px;border:1px solid var(--c-border);border-radius:5px;background:var(--c-bg2);color:var(--c-text)" onchange="saveCuotaFecha(${fi},this.value)" title="Cuota para ${f.nombre}"/></div></th>`).join('');
+  el.innerHTML=`<div class="row" style="margin-top:4px">
+    <label style="font-size:12px;white-space:nowrap">Cuota base:</label>
+    <input id="cuota-monto" type="number" min="0" step="100" value="${cuotaBase}" style="max-width:80px" onchange="saveCuota(this.value)"/>
+    <span style="font-size:12px;color:var(--c-text2)">$ (aplica a fechas sin cuota propia)</span>
+  </div>
+  <p class="sub">Podés editar la cuota de cada fecha individualmente en el encabezado de la tabla.</p>
+  <div style="overflow-x:auto"><table>
+    <thead><tr><th>Participante</th>${headerCuotas}<th>Debe</th><th>Pagado</th><th>Saldo</th></tr></thead>
     <tbody>${uids.map(uid=>{
       const p=allParts()[uid]||{};const nombre=p.nombre?`${p.nombre} ${p.apellido}`:uid;
       let debe=0,pagado=0;
       const celdas=fechas.map((_,fi)=>{
         const aus=ausente(fi,uid);const pago=t.pagos?.[`${uid}-${fi}`]||0;
-        if(!aus)debe+=cuota;pagado+=pago;
+        const cf=cuotaFecha(fi);
+        if(!aus)debe+=cf;pagado+=pago;
         if(aus)return`<td><span class="badge badge-gray">No juega</span></td>`;
-        const diff=pago-cuota;
+        const diff=pago-cf;
         return`<td><div style="display:flex;gap:3px;align-items:center"><input type="number" min="0" step="100" value="${pago}" style="width:62px;padding:3px 5px;font-size:12px;border:1px solid var(--c-border);border-radius:6px;background:var(--c-bg);color:var(--c-text)" onchange="savePago('${uid}',${fi},this.value)"/>${diff===0?'<span class="badge badge-green">OK</span>':diff>0?`<span class="badge badge-amber">+${diff}</span>`:`<span class="badge badge-red">${diff}</span>`}</div></td>`;
       }).join('');
       const saldo=pagado-debe;
       return`<tr><td style="font-weight:500;white-space:nowrap">${nombre}</td>${celdas}<td>$${debe.toLocaleString()}</td><td>$${pagado.toLocaleString()}</td><td><span class="badge ${saldo>=0?'badge-green':'badge-red'}">${saldo>=0?'+':''}$${saldo.toLocaleString()}</span></td></tr>`;
-    }).join('')}</tbody></table></div>`;
+    }).join('')}</tbody>
+  </table></div>`;
 }
 window.saveCuota=async function(val){await fupd(`torneos/${S.torneoActivo}`,{cuota:parseFloat(val)||500});};
+window.saveCuotaFecha=async function(fi,val){
+  const t=T();if(!t)return;
+  const cf=JSON.parse(JSON.stringify(t.cuotasFecha||{}));
+  cf[fi]=parseFloat(val)||0;
+  await fupd(`torneos/${S.torneoActivo}`,{cuotasFecha:cf});
+};
 window.savePago=async function(uid,fi,val){const t=T();if(!t)return;const pagos=JSON.parse(JSON.stringify(t.pagos||{}));pagos[`${uid}-${fi}`]=parseFloat(val)||0;await fupd(`torneos/${S.torneoActivo}`,{pagos});};
 
 // ── TAB PREMIOS ──────────────────────────────────────────────
@@ -596,7 +657,7 @@ function rtPos(el){
   const ranking=uids.map(uid=>({uid,nombre:nombrePart(uid),pts:totalG(uid,t,m)})).sort((a,b)=>b.pts-a.pts);
   const cuota=t.cuota||500;
   const totalRec=uids.reduce((s,uid)=>(t.fechas||[]).reduce((ss,_,fi)=>ss+(t.pagos?.[`${uid}-${fi}`]||0),s),0);
-  const deudores=uids.filter(uid=>(t.fechas||[]).some((_,fi)=>!ausente(fi,uid)&&(t.pagos?.[`${uid}-${fi}`]||0)<cuota)).length;
+  const deudores=uids.filter(uid=>(t.fechas||[]).some((_,fi)=>!ausente(fi,uid)&&(t.pagos?.[`${uid}-${fi}`]||0)<(t.cuotasFecha?.[fi]??cuota))).length;
   el.innerHTML=`<div class="metrics-grid" style="margin-top:4px">
     <div class="metric"><div class="metric-val">${uids.length}</div><div class="metric-lbl">Participantes</div></div>
     <div class="metric"><div class="metric-val">${(t.fechas||[]).length}</div><div class="metric-lbl">Fechas</div></div>
@@ -606,7 +667,7 @@ function rtPos(el){
     <thead><tr><th>#</th><th>Participante</th><th>Total</th>${(t.fechas||[]).map(f=>`<th style="white-space:nowrap">${f.nombre}</th>`).join('')}${isAdmin?'<th>Pagos</th>':''}</tr></thead>
     <tbody>${ranking.map((r,i)=>{
       const pagado=(t.fechas||[]).reduce((s,_,fi)=>s+(t.pagos?.[`${r.uid}-${fi}`]||0),0);
-      const debe=(t.fechas||[]).reduce((s,_,fi)=>s+(ausente(fi,r.uid)?0:cuota),0);
+      const debe=(t.fechas||[]).reduce((s,_,fi)=>s+(ausente(fi,r.uid)?0:(t.cuotasFecha?.[fi]??cuota)),0);
       const saldo=pagado-debe;const esMio=r.uid===S.uid;
       return`<tr ${esMio?'style="background:var(--c-info-bg)"':''}>
         <td>${i+1}</td><td style="font-weight:${i<3?'500':'400'};white-space:nowrap">${i===0?'🥇 ':i===1?'🥈 ':i===2?'🥉 ':''}${r.nombre}${esMio?' ⬅':''}</td>
