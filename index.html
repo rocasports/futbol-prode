@@ -135,7 +135,7 @@ function suscribirTorneos(){
 function renderLogin(){
   setApp(`<div class="lw"><div class="lc">
     <div class="ll">⚽</div><h1 class="lt">Prode Fútbol</h1><p class="ls">Ingresá para participar</p>
-    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v1.3</p>
+    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v1.4</p>
     <button class="btn-google" onclick="loginGoogle()"><svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 6.29C4.672 4.163 6.656 3.58 9 3.58z"/></svg>Entrar con Google</button>
     <div class="ld">o con tu mail</div>
     <input id="login-mail" class="li" type="email" placeholder="tu@mail.com"/>
@@ -399,30 +399,76 @@ function optsLocal(fi){
   // En local: ocultar los ya usados en esta fecha
   return(t.equipos||[]).filter(e=>!usados.has(e)).map(e=>`<option value="${e}">${e}</option>`).join('');
 }
-function optsVisita(fi,localSel){
-  const t=T();if(!t)return'';
+function getVisitaData(fi,localSel){
+  const t=T();if(!t)return{disponibles:[],grisados:[]};
   const usados=usadosEnFecha(fi);
   const cruzadosComoVisita=new Set();
-  (T()?.fechas||[]).forEach((f,idx)=>{
+  (t.fechas||[]).forEach((f,idx)=>{
     if(idx===fi)return;
-    (f.partidos||[]).forEach(p=>{
-      if(p.local===localSel)cruzadosComoVisita.add(p.visita);
-    });
+    (f.partidos||[]).forEach(p=>{if(p.local===localSel)cruzadosComoVisita.add(p.visita);});
   });
-  const disponibles=[];const grisados=[];
+  const disponibles=[],grisados=[];
   (t.equipos||[]).forEach(e=>{
-    if(e===localSel||usados.has(e))return; // ocultar
+    if(e===localSel||usados.has(e))return;
     if(cruzadosComoVisita.has(e))grisados.push(e);
     else disponibles.push(e);
   });
-  let html=disponibles.map(e=>`<option value="${e}">${e}</option>`).join('');
-  if(grisados.length){
-    html+=`<optgroup label="── Ya cruzaron (este cruce exacto existe) ──" style="color:var(--c-text3)">`;
-    html+=grisados.map(e=>`<option value="${e}" style="color:var(--c-text3)">${e}</option>`).join('');
-    html+=`</optgroup>`;
-  }
-  return html;
+  return{disponibles,grisados};
 }
+
+// Valor seleccionado de visita por fecha
+const visitaSeleccionada={};
+
+function renderCustomVisita(fi,localSel){
+  const{disponibles,grisados}=getVisitaData(fi,localSel);
+  // Resetear si el valor actual ya no es válido
+  if(!visitaSeleccionada[fi]||localSel===visitaSeleccionada[fi])
+    visitaSeleccionada[fi]=disponibles[0]||grisados[0]||'';
+  const val=visitaSeleccionada[fi];
+  const isGray=grisados.includes(val);
+  const optsDisp=disponibles.map(e=>`
+    <div class="custom-select-opt ${e===val?'selected':''}" onclick="selVisita(${fi},'${e.replace(/'/g,"\'")}')">
+      <span>${e}</span>${e===val?'<span style="color:var(--c-info);font-size:12px">✓</span>':''}
+    </div>`).join('');
+  const optsGray=grisados.length?`
+    <div class="custom-select-sep">⚠️ Ya cruzaron con ${localSel||'este equipo'} como local</div>
+    ${grisados.map(e=>`
+      <div class="custom-select-opt grayed ${e===val?'selected':''}" onclick="selVisita(${fi},'${e.replace(/'/g,"\'")}')">
+        <span>${e}</span><span class="opt-tag">ya cruzaron</span>
+      </div>`).join('')}`:'';
+  return`<div class="custom-select-wrap" id="visita-wrap-${fi}">
+    <button type="button" class="custom-select-btn ${isGray?'style="border-color:var(--c-warn)"':''}" onclick="toggleDropdown(${fi})" id="visita-btn-${fi}">
+      <span ${isGray?'style="color:var(--c-warn)"':''}>${val||'Seleccioná...'}</span>
+      <span style="font-size:10px;color:var(--c-text3)">▾</span>
+    </button>
+    <div class="custom-select-dropdown" id="visita-dd-${fi}">
+      ${optsDisp}${optsGray}
+    </div>
+  </div>`;
+}
+
+window.toggleDropdown=function(fi){
+  const dd=document.getElementById('visita-dd-'+fi);if(!dd)return;
+  dd.classList.toggle('open');
+  // Cerrar otros dropdowns abiertos
+  document.querySelectorAll('.custom-select-dropdown.open').forEach(d=>{if(d.id!=='visita-dd-'+fi)d.classList.remove('open');});
+};
+window.selVisita=function(fi,val){
+  visitaSeleccionada[fi]=val;
+  const dd=document.getElementById('visita-dd-'+fi);if(dd)dd.classList.remove('open');
+  const btn=document.getElementById('visita-btn-'+fi);
+  const t=T();
+  const cruzados=new Set();
+  const localSel=document.getElementById('local-'+fi)?.value||'';
+  (t?.fechas||[]).forEach((f,idx)=>{if(idx===fi)return;(f.partidos||[]).forEach(p=>{if(p.local===localSel)cruzados.add(p.visita);});});
+  const isGray=cruzados.has(val);
+  if(btn){btn.innerHTML=`<span ${isGray?'style="color:var(--c-warn)"':''}>${val}</span><span style="font-size:10px;color:var(--c-text3)">▾</span>`;}
+};
+// Cerrar dropdown al hacer click fuera
+document.addEventListener('click',e=>{
+  if(!e.target.closest('.custom-select-wrap'))
+    document.querySelectorAll('.custom-select-dropdown.open').forEach(d=>d.classList.remove('open'));
+});
 function cruceDup(local,visita,fi){const t=T();if(!t)return null;for(let i=0;i<(t.fechas||[]).length;i++){if(i===fi)continue;const f=t.fechas[i];const e=(f.partidos||[]).find(p=>(p.local===local&&p.visita===visita)||(p.local===visita&&p.visita===local));if(e)return{fi:i,nombre:f.nombre,inv:(e.local===visita)};}return null;}
 
 let editandoFecha=-1; // índice de la fecha que se está editando (-1 = ninguna)
@@ -500,7 +546,7 @@ function rtFechas(el){
       </div>
       ${(f.partidos||[]).map((p,pi)=>`<div class="row" style="margin-bottom:3px"><span style="flex:1;font-size:12px">${p.local} vs ${p.visita}</span>${(f.estado||"planificada")==="planificada"?`<button class="btn btn-sm btn-danger" onclick="removePartido(${fi},${pi})">✕</button>`:`<button class="btn btn-sm" disabled style="opacity:.35;cursor:not-allowed" title="No modificable">✕</button>`}</div>`).join('')}
       ${lib.length>=2
-        ?`<div class="row" style="margin-top:6px"><select id="local-${fi}" onchange="actualizarVisita(${fi})">${optsLocal(fi)}</select><span style="color:#aaa;font-size:11px">vs</span><select id="visita-${fi}">${optsVisita(fi,'')}</select><button class="btn btn-sm btn-primary" onclick="addPartido(${fi})">+ Partido</button></div>`
+        ?`<div class="row" style="margin-top:6px"><select id="local-${fi}" onchange="actualizarVisita(${fi})">${optsLocal(fi)}</select><span style="color:#aaa;font-size:11px">vs</span>${renderCustomVisita(fi,document.getElementById('local-'+fi)?.value||'')}<button class="btn btn-sm btn-primary" onclick="addPartido(${fi})">+ Partido</button></div>`
         :`<p style="font-size:11px;color:var(--c-text2);margin-top:6px">${lib.length===1?'Solo queda 1 equipo.':'Todos los equipos asignados.'}</p>`}
     </div>`;
   }).join('')}`;
@@ -547,21 +593,17 @@ window.removeFecha=async function(fi){
 
 window.actualizarVisita=function(fi){
   const localSel=document.getElementById('local-'+fi)?.value||'';
-  const visitaSel=document.getElementById('visita-'+fi);
-  if(!visitaSel)return;
-  visitaSel.innerHTML=optsVisita(fi,localSel);
-  // Si el actual visitante es igual al local o está deshabilitado, resetear
-  if(visitaSel.value===localSel||visitaSel.options[visitaSel.selectedIndex]?.disabled){
-    // Buscar primer habilitado que no sea el local
-    for(const opt of visitaSel.options){
-      if(!opt.disabled&&opt.value!==localSel){visitaSel.value=opt.value;break;}
-    }
-  }
+  // Resetear selección de visita si coincide con el nuevo local
+  if(visitaSeleccionada[fi]===localSel)delete visitaSeleccionada[fi];
+  // Re-renderizar el dropdown custom
+  const wrap=document.getElementById('visita-wrap-'+fi);
+  if(wrap)wrap.outerHTML=renderCustomVisita(fi,localSel);
+  else renderTab('fechas'); // fallback
 };
 window.addPartido=async function(fi){
   const t=T();if(!t)return;
   const local=document.getElementById('local-'+fi).value;
-  const visita=document.getElementById('visita-'+fi).value;
+  const visita=visitaSeleccionada[fi]||'';
   if(!local||!visita||local===visita){alert('Seleccioná dos equipos distintos');return;}
   const dup=cruceDup(local,visita,fi);
   if(dup){const m=dup.inv?`Este cruce ya existe en "${dup.nombre}" pero invertido. ¿Agregarlo igual?`:`Este cruce ya existe en "${dup.nombre}". ¿Agregarlo igual?`;if(!confirm(m))return;}
@@ -1092,6 +1134,18 @@ td{padding:6px 8px;border-bottom:1px solid var(--c-border)}
 .pozo-ganado{background:var(--c-success-bg);border:1px solid var(--c-success-border);color:var(--c-success)}
 .pozo-pendiente{background:var(--c-bg2);border:1px solid var(--c-border);color:var(--c-text2)}
 code{background:var(--c-bg2);padding:2px 6px;border-radius:4px;font-size:11px;border:1px solid var(--c-border)}
+/* Dropdown custom para visita */
+.custom-select-wrap{position:relative;flex:1}
+.custom-select-btn{width:100%;padding:6px 10px;border:1px solid var(--c-border);border-radius:8px;font-size:13px;background:var(--c-bg);color:var(--c-text);cursor:pointer;text-align:left;display:flex;justify-content:space-between;align-items:center}
+.custom-select-btn:focus{outline:none;border-color:var(--c-info);box-shadow:0 0 0 3px var(--c-info-bg)}
+.custom-select-dropdown{position:absolute;top:calc(100% + 4px);left:0;right:0;background:var(--c-bg);border:1px solid var(--c-border);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.15);z-index:100;max-height:220px;overflow-y:auto;display:none}
+.custom-select-dropdown.open{display:block}
+.custom-select-opt{padding:7px 12px;font-size:13px;cursor:pointer;display:flex;justify-content:space-between;align-items:center}
+.custom-select-opt:hover{background:var(--c-bg2)}
+.custom-select-opt.grayed{color:var(--c-text3);cursor:pointer}
+.custom-select-opt.grayed:hover{background:var(--c-warn-bg)}
+.custom-select-opt.grayed .opt-tag{font-size:10px;color:var(--c-warn);background:var(--c-warn-bg);border:1px solid var(--c-warn-border);border-radius:6px;padding:1px 5px}
+.custom-select-sep{padding:4px 12px;font-size:10px;color:var(--c-text3);background:var(--c-bg2);border-top:1px solid var(--c-border);border-bottom:1px solid var(--c-border)}
 </style>
 <body><div id="app"></div></body>
 </html>
