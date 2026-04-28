@@ -135,7 +135,7 @@ function suscribirTorneos(){
 function renderLogin(){
   setApp(`<div class="lw"><div class="lc">
     <div class="ll">⚽</div><h1 class="lt">Prode Fútbol</h1><p class="ls">Ingresá para participar</p>
-    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v1.0</p>
+    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v1.1</p>
     <button class="btn-google" onclick="loginGoogle()"><svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 6.29C4.672 4.163 6.656 3.58 9 3.58z"/></svg>Entrar con Google</button>
     <div class="ld">o con tu mail</div>
     <input id="login-mail" class="li" type="email" placeholder="tu@mail.com"/>
@@ -392,6 +392,36 @@ window.removeEquipo=async function(i){const t=T();if(!t)return;const lista=[...(
 
 // ── TAB FECHAS ───────────────────────────────────────────────
 function libres(fi){const t=T();if(!t)return[];const u=new Set();(t.fechas?.[fi]?.partidos||[]).forEach(p=>{u.add(p.local);u.add(p.visita);});return(t.equipos||[]).filter(e=>!u.has(e));}
+function usadosEnFecha(fi){const t=T();if(!t)return new Set();const u=new Set();(t.fechas?.[fi]?.partidos||[]).forEach(p=>{u.add(p.local);u.add(p.visita);});return u;}
+function optsLocal(fi){
+  const t=T();if(!t)return'';
+  const usados=usadosEnFecha(fi);
+  // En local: ocultar los ya usados en esta fecha
+  return(t.equipos||[]).filter(e=>!usados.has(e)).map(e=>`<option value="${e}">${e}</option>`).join('');
+}
+function optsVisita(fi,localSel){
+  const t=T();if(!t)return'';
+  const usados=usadosEnFecha(fi);
+  // Cruces exactos previos: localSel como local, otros como visita (en otras fechas)
+  const cruzadosComoVisita=new Set();
+  (T()?.fechas||[]).forEach((f,idx)=>{
+    if(idx===fi)return;
+    (f.partidos||[]).forEach(p=>{
+      if(p.local===localSel)cruzadosComoVisita.add(p.visita);
+    });
+  });
+  return(t.equipos||[]).map(e=>{
+    if(e===localSel||usados.has(e)){
+      // Ocultar: es el mismo equipo o ya jugó en esta fecha
+      return'';
+    }
+    const yaJugaron=cruzadosComoVisita.has(e);
+    if(yaJugaron){
+      return`<option value="${e}" disabled style="color:var(--c-text3)">${e} (ya cruzaron)</option>`;
+    }
+    return`<option value="${e}">${e}</option>`;
+  }).join('');
+}
 function cruceDup(local,visita,fi){const t=T();if(!t)return null;for(let i=0;i<(t.fechas||[]).length;i++){if(i===fi)continue;const f=t.fechas[i];const e=(f.partidos||[]).find(p=>(p.local===local&&p.visita===visita)||(p.local===visita&&p.visita===local));if(e)return{fi:i,nombre:f.nombre,inv:(e.local===visita)};}return null;}
 
 function rtFechas(el){
@@ -408,7 +438,7 @@ function rtFechas(el){
     <p style="font-size:11px;color:var(--c-text2);margin-top:4px">Genera nuevas fechas con local y visita intercambiados, numeradas a continuación.</p>
   </div>`:``}
   ${!fechas.length?'<p class="sub">No hay fechas aún.</p>':fechas.map((f,fi)=>{
-    const lib=libres(fi);const opts=lib.map(e=>`<option>${e}</option>`).join('');
+    const lib=libres(fi);const opts=lib.map(e=>`<option>${e}</option>`).join(''); // opts usado como fallback
     const ec=ESTADO_COLOR[f.estado||'planificada'];
     return`<div class="card" style="border-left:3px solid ${ec}">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;flex-wrap:wrap;gap:6px">
@@ -431,7 +461,7 @@ function rtFechas(el){
       </div>
       ${(f.partidos||[]).map((p,pi)=>`<div class="row" style="margin-bottom:3px"><span style="flex:1;font-size:12px">${p.local} vs ${p.visita}</span><button class="btn btn-sm btn-danger" onclick="removePartido(${fi},${pi})">✕</button></div>`).join('')}
       ${lib.length>=2
-        ?`<div class="row" style="margin-top:6px"><select id="local-${fi}">${opts}</select><span style="color:#aaa;font-size:11px">vs</span><select id="visita-${fi}">${opts}</select><button class="btn btn-sm btn-primary" onclick="addPartido(${fi})">+ Partido</button></div>`
+        ?`<div class="row" style="margin-top:6px"><select id="local-${fi}" onchange="actualizarVisita(${fi})">${optsLocal(fi)}</select><span style="color:#aaa;font-size:11px">vs</span><select id="visita-${fi}">${optsVisita(fi,'')}</select><button class="btn btn-sm btn-primary" onclick="addPartido(${fi})">+ Partido</button></div>`
         :`<p style="font-size:11px;color:var(--c-text2);margin-top:6px">${lib.length===1?'Solo queda 1 equipo.':'Todos los equipos asignados.'}</p>`}
     </div>`;
   }).join('')}`;
@@ -466,6 +496,19 @@ window.moverF=async function(fi,dir){
 
 window.removeFecha=async function(fi){const t=T();if(!t)return;const fechas=JSON.parse(JSON.stringify(t.fechas||[]));fechas.splice(fi,1);await fupd(`torneos/${S.torneoActivo}`,{fechas});};
 
+window.actualizarVisita=function(fi){
+  const localSel=document.getElementById('local-'+fi)?.value||'';
+  const visitaSel=document.getElementById('visita-'+fi);
+  if(!visitaSel)return;
+  visitaSel.innerHTML=optsVisita(fi,localSel);
+  // Si el actual visitante es igual al local o está deshabilitado, resetear
+  if(visitaSel.value===localSel||visitaSel.options[visitaSel.selectedIndex]?.disabled){
+    // Buscar primer habilitado que no sea el local
+    for(const opt of visitaSel.options){
+      if(!opt.disabled&&opt.value!==localSel){visitaSel.value=opt.value;break;}
+    }
+  }
+};
 window.addPartido=async function(fi){
   const t=T();if(!t)return;
   const local=document.getElementById('local-'+fi).value;
