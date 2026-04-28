@@ -587,95 +587,120 @@ window.toggleAus=async function(fi,uid){const t=T();if(!t)return;const aus=JSON.
 // ── TAB PAGOS ────────────────────────────────────────────────
 function cuotaFecha(fi){const t=T();if(!t)return 0;return t.cuotasFecha?.[fi]??t.cuota??500;}
 
-// ── PAGOS: resumen + detalle de movimientos ──────────────────
-// pagosDetalle: { "uid-fi": [{monto, fecha, nota}] }
-function totalPagadoDetalle(uid,fi,t){
-  const movs=t.pagosDetalle?.[`${uid}-${fi}`]||[];
-  return movs.reduce((s,m)=>s+m.monto,0);
+// ── Distribuir pagos automáticamente a fechas más antiguas ───
+function distribuirPagos(uid, t){
+  // Retorna {fi: montoCubierto} distribuyendo pagos del más antiguo al más nuevo
+  const fechas=t.fechas||[];
+  const movs=t.pagosDetalle?.[uid]||[];
+  const totalPagado=movs.reduce((s,m)=>s+m.monto,0);
+  let restante=totalPagado;
+  const cobertura={};
+  for(let fi=0;fi<fechas.length;fi++){
+    if(ausente(fi,uid)){cobertura[fi]=null;continue;}
+    const cf=cuotaFecha(fi);
+    if(restante<=0){cobertura[fi]=0;continue;}
+    const cubre=Math.min(restante,cf);
+    cobertura[fi]=cubre;
+    restante-=cubre;
+  }
+  return{cobertura,totalPagado,restante};
 }
 
 function rtPagos(el){
-  const t=T();if(!t)return;const uids=partsT();const fechas=t.fechas||[];
+  const t=T();if(!t)return;
+  const uids=partsT();const fechas=t.fechas||[];
   if(!uids.length||!fechas.length){el.innerHTML='<p class="sub" style="margin-top:4px">Configurá fechas y participantes primero.</p>';return;}
   const cuotaBase=t.cuota||500;
   const vista=el.dataset.vista||'resumen';
 
-  // Tabs de vista
-  const tabs=`<div style="display:flex;gap:6px;margin-bottom:12px">
-    <button class="btn btn-sm ${vista==='resumen'?'btn-primary':''}" onclick="setPagosVista('resumen')">📊 Resumen</button>
-    <button class="btn btn-sm ${vista==='detalle'?'btn-primary':''}" onclick="setPagosVista('detalle')">📋 Detalle de pagos</button>
-  </div>`;
+  // FIX 1: no re-renderizar si hay un input con foco en este tab
+  if(document.activeElement&&el.contains(document.activeElement))return;
 
-  // Config cuota base
-  const cfgCuota=`<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
-    <label style="font-size:12px;white-space:nowrap">Cuota base:</label>
-    <input id="cuota-monto" type="number" min="0" step="100" value="${cuotaBase}" style="max-width:80px" onblur="saveCuota(this.value)"/>
-    <span style="font-size:12px;color:var(--c-text2)">$ por fecha (editable por fecha en el encabezado)</span>
+  const tabsBtns=`<div style="display:flex;gap:6px;margin-bottom:12px">
+    <button class="btn btn-sm ${vista==='resumen'?'btn-primary':''}" onclick="setPagosVista('resumen')">📊 Resumen</button>
+    <button class="btn btn-sm ${vista==='detalle'?'btn-primary':''}" onclick="setPagosVista('detalle')">📋 Movimientos</button>
   </div>`;
 
   if(vista==='resumen'){
-    const headerCuotas=fechas.map((f,fi)=>`<th><div style="font-size:11px;font-weight:500">${f.nombre}</div><div style="display:flex;gap:2px;align-items:center;margin-top:3px"><span style="font-size:10px;color:var(--c-text2)">$</span><input type="number" min="0" step="100" value="${cuotaFecha(fi)}" style="width:55px;padding:2px 4px;font-size:11px;border:1px solid var(--c-border);border-radius:5px;background:var(--c-bg2);color:var(--c-text)" onblur="saveCuotaFecha(${fi},this.value)"/></div></th>`).join('');
+    // Cuotas editables por fecha en encabezado
+    const headerCuotas=fechas.map((f,fi)=>`<th>
+      <div style="font-size:11px;font-weight:500">${f.nombre}</div>
+      <div style="display:flex;gap:2px;align-items:center;margin-top:3px">
+        <span style="font-size:10px;color:var(--c-text2)">$</span>
+        <input type="number" min="0" step="100" value="${cuotaFecha(fi)}"
+          style="width:55px;padding:2px 4px;font-size:11px;border:1px solid var(--c-border);border-radius:5px;background:var(--c-bg2);color:var(--c-text)"
+          onblur="saveCuotaFecha(${fi},this.value)"/>
+      </div>
+    </th>`).join('');
+
+    const cfgBase=`<div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
+      <label style="font-size:12px;white-space:nowrap">Cuota base:</label>
+      <input type="number" min="0" step="100" value="${cuotaBase}"
+        style="max-width:80px;padding:5px 8px;font-size:13px;border:1px solid var(--c-border);border-radius:8px;background:var(--c-bg);color:var(--c-text)"
+        onblur="saveCuota(this.value)"/>
+      <span style="font-size:12px;color:var(--c-text2)">$ — editable por fecha en el encabezado</span>
+    </div>`;
+
     const filas=uids.map(uid=>{
-      const p=allParts()[uid]||{};const nombre=p.nombre?`${p.nombre} ${p.apellido}`:uid;
-      let debe=0,pagado=0;
-      const celdas=fechas.map((_,fi)=>{
-        const aus=ausente(fi,uid);const cf=cuotaFecha(fi);
-        const movs=t.pagosDetalle?.[`${uid}-${fi}`]||[];
-        const pago=movs.reduce((s,m)=>s+m.monto,0);
-        if(!aus)debe+=cf;pagado+=pago;
-        if(aus)return`<td><span class="badge badge-gray">No juega</span></td>`;
-        const diff=pago-cf;
+      const p=allParts()[uid]||{};
+      const nombre=p.nombre?`${p.nombre} ${p.apellido}`:uid;
+      const {cobertura,totalPagado}=distribuirPagos(uid,t);
+      let totalDebe=0;
+      const celdas=fechas.map((f,fi)=>{
+        if(ausente(fi,uid))return`<td><span class="badge badge-gray">No juega</span></td>`;
+        const cf=cuotaFecha(fi);totalDebe+=cf;
+        const cubre=cobertura[fi]||0;
+        const diff=cubre-cf;
         return`<td style="text-align:center">
-          <div style="font-size:13px;font-weight:500">$${pago.toLocaleString()}</div>
-          <div>${diff===0?'<span class="badge badge-green">OK</span>':diff>0?`<span class="badge badge-amber">+$${diff.toLocaleString()}</span>`:`<span class="badge badge-red">-$${Math.abs(diff).toLocaleString()}</span>`}</div>
-          <button onclick="abrirDetallePago('${uid}',${fi})" style="font-size:10px;color:var(--c-info);background:none;border:none;cursor:pointer;padding:2px">+ agregar pago</button>
+          <div style="font-size:13px;font-weight:500">$${cubre.toLocaleString()}</div>
+          ${diff>=0?'<span class="badge badge-green">✓</span>':`<span class="badge badge-red">-$${Math.abs(diff).toLocaleString()}</span>`}
         </td>`;
       }).join('');
-      const saldo=pagado-debe;
-      return`<tr><td style="font-weight:500;white-space:nowrap">${nombre}</td>${celdas}<td>$${debe.toLocaleString()}</td><td>$${pagado.toLocaleString()}</td><td><span class="badge ${saldo>=0?'badge-green':'badge-red'}">${saldo>=0?'+':''}$${saldo.toLocaleString()}</span></td></tr>`;
+      const saldo=totalPagado-totalDebe;
+      return`<tr>
+        <td style="font-weight:500;white-space:nowrap">${nombre}</td>
+        ${celdas}
+        <td>$${totalDebe.toLocaleString()}</td>
+        <td>$${totalPagado.toLocaleString()}</td>
+        <td><span class="badge ${saldo>=0?'badge-green':'badge-red'}">${saldo>=0?'+':''}$${saldo.toLocaleString()}</span></td>
+      </tr>`;
     }).join('');
-    el.innerHTML=tabs+cfgCuota+`<div style="overflow-x:auto"><table>
+
+    el.innerHTML=tabsBtns+cfgBase+`<div style="overflow-x:auto"><table>
       <thead><tr><th>Participante</th>${headerCuotas}<th>Debe</th><th>Pagado</th><th>Saldo</th></tr></thead>
       <tbody>${filas}</tbody>
-    </table></div>
-    <div id="modal-pago" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:999;display:none;align-items:center;justify-content:center"></div>`;
+    </table></div>`;
 
   } else {
-    // Vista detalle: por participante, lista de movimientos
-    const filas=uids.map(uid=>{
-      const p=allParts()[uid]||{};const nombre=p.nombre?`${p.nombre} ${p.apellido}`:uid;
-      let totalDebe=0,totalPag=0;
-      const bloques=fechas.map((f,fi)=>{
-        const aus=ausente(fi,uid);const cf=cuotaFecha(fi);
-        if(!aus)totalDebe+=cf;
-        if(aus)return``;
-        const movs=t.pagosDetalle?.[`${uid}-${fi}`]||[];
-        const sumMovs=movs.reduce((s,m)=>s+m.monto,0);totalPag+=sumMovs;
-        const diff=sumMovs-cf;
-        return`<div style="margin-bottom:8px">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-            <span style="font-size:12px;font-weight:500">${f.nombre} <span style="color:var(--c-text2);font-weight:400">(cuota: $${cf.toLocaleString()})</span></span>
-            <div style="display:flex;align-items:center;gap:6px">
-              <span style="font-size:12px">Total: <strong>$${sumMovs.toLocaleString()}</strong></span>
-              ${diff===0?'<span class="badge badge-green">OK</span>':diff>0?`<span class="badge badge-amber">+$${diff.toLocaleString()}</span>`:`<span class="badge badge-red">-$${Math.abs(diff).toLocaleString()}</span>`}
-              <button class="btn btn-sm btn-primary" onclick="abrirDetallePago('${uid}',${fi})">+ Pago</button>
-            </div>
-          </div>
-          ${movs.length?`<table style="width:100%;font-size:11px"><thead><tr><th>Fecha pago</th><th>Monto</th><th>Nota</th><th></th></tr></thead><tbody>
-            ${movs.map((m,mi)=>`<tr><td>${m.fecha||'-'}</td><td>$${m.monto.toLocaleString()}</td><td style="color:var(--c-text2)">${m.nota||''}</td><td><button onclick="eliminarMovPago('${uid}',${fi},${mi})" style="background:none;border:none;cursor:pointer;color:var(--c-danger);font-size:12px">✕</button></td></tr>`).join('')}
-          </tbody></table>`:`<p style="font-size:11px;color:var(--c-text2)">Sin pagos registrados</p>`}
-        </div>`;
-      }).join('');
-      const saldo=totalPag-totalDebe;
+    // Vista movimientos: lista simple por participante
+    const bloques=uids.map(uid=>{
+      const p=allParts()[uid]||{};
+      const nombre=p.nombre?`${p.nombre} ${p.apellido}`:uid;
+      const movs=t.pagosDetalle?.[uid]||[];
+      const total=movs.reduce((s,m)=>s+m.monto,0);
+      const totalDebe=fechas.reduce((s,_,fi)=>s+(ausente(fi,uid)?0:cuotaFecha(fi)),0);
+      const saldo=total-totalDebe;
       return`<div class="card">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:6px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:6px">
           <span style="font-weight:500;font-size:13px">${nombre}</span>
-          <span class="badge ${saldo>=0?'badge-green':'badge-red'}">${saldo>=0?'Saldo a favor $'+saldo.toLocaleString():'Debe $'+Math.abs(saldo).toLocaleString()}</span>
+          <div style="display:flex;gap:8px;align-items:center">
+            <span style="font-size:12px">Total: <strong>$${total.toLocaleString()}</strong></span>
+            <span class="badge ${saldo>=0?'badge-green':'badge-red'}">${saldo>=0?'A favor $'+saldo.toLocaleString():'Debe $'+Math.abs(saldo).toLocaleString()}</span>
+            <button class="btn btn-sm btn-primary" onclick="abrirNuevoPago('${uid}')">+ Pago</button>
+          </div>
         </div>
-        ${bloques}
+        ${movs.length?`<table style="width:100%"><thead><tr><th>Fecha</th><th>Monto</th><th>Nota</th><th></th></tr></thead>
+        <tbody>${movs.map((m,mi)=>`<tr>
+          <td>${m.fecha||'—'}</td>
+          <td style="font-weight:500">$${m.monto.toLocaleString()}</td>
+          <td style="color:var(--c-text2);font-size:12px">${m.nota||''}</td>
+          <td><button onclick="eliminarMov('${uid}',${mi})" style="background:none;border:none;cursor:pointer;color:var(--c-danger);font-size:13px">✕</button></td>
+        </tr>`).join('')}</tbody></table>`
+        :`<p style="font-size:12px;color:var(--c-text2)">Sin pagos registrados.</p>`}
       </div>`;
     }).join('');
-    el.innerHTML=tabs+cfgCuota+filas+`<div id="modal-pago" style="display:none"></div>`;
+
+    el.innerHTML=tabsBtns+bloques+`<div id="modal-pago" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:999;align-items:center;justify-content:center"></div>`;
   }
   el.dataset.vista=vista;
 }
@@ -685,51 +710,48 @@ window.setPagosVista=function(vista){
   el.dataset.vista=vista;renderTab('pagos');
 };
 
-window.abrirDetallePago=function(uid,fi){
-  const t=T();if(!t)return;
-  const p=allParts()[uid]||{};const f=(t.fechas||[])[fi]||{};
+window.abrirNuevoPago=function(uid){
+  const p=allParts()[uid]||{};
   const nombre=p.nombre?`${p.nombre} ${p.apellido}`:uid;
   const modal=document.getElementById('modal-pago');if(!modal)return;
   const hoy=new Date().toISOString().split('T')[0];
   modal.style.display='flex';
-  modal.style.alignItems='center';
-  modal.style.justifyContent='center';
-  modal.innerHTML=`<div style="background:var(--c-bg);border-radius:12px;padding:24px;width:100%;max-width:360px;box-shadow:0 8px 32px rgba(0,0,0,.2)">
-    <p style="font-weight:500;font-size:14px;margin-bottom:12px">Registrar pago — ${nombre} / ${f.nombre}</p>
-    <div class="row"><label class="lbl">Monto:</label><input id="mov-monto" type="number" min="0" step="100" placeholder="$" value="${cuotaFecha(fi)}"/></div>
+  modal.innerHTML=`<div style="background:var(--c-bg);border-radius:12px;padding:24px;width:100%;max-width:340px;box-shadow:0 8px 32px rgba(0,0,0,.25)">
+    <p style="font-weight:500;font-size:14px;margin-bottom:14px">Registrar pago — ${nombre}</p>
+    <div class="row"><label class="lbl">Monto:</label><input id="mov-monto" type="number" min="0" step="100" placeholder="$"/></div>
     <div class="row"><label class="lbl">Fecha:</label><input id="mov-fecha" type="date" value="${hoy}"/></div>
     <div class="row"><label class="lbl">Nota:</label><input id="mov-nota" placeholder="Opcional..."/></div>
-    <div style="display:flex;gap:8px;margin-top:8px">
-      <button class="btn btn-primary btn-sm" onclick="guardarMovPago('${uid}',${fi})">Guardar</button>
-      <button class="btn btn-sm" onclick="cerrarModalPago()">Cancelar</button>
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <button class="btn btn-primary btn-sm" onclick="guardarMov('${uid}')">Guardar</button>
+      <button class="btn btn-sm" onclick="cerrarModal()">Cancelar</button>
     </div>
   </div>`;
 };
 
-window.cerrarModalPago=function(){
+window.cerrarModal=function(){
   const m=document.getElementById('modal-pago');if(m)m.style.display='none';
 };
 
-window.guardarMovPago=async function(uid,fi){
+window.guardarMov=async function(uid){
   const monto=parseFloat(document.getElementById('mov-monto').value)||0;
   const fecha=document.getElementById('mov-fecha').value;
   const nota=document.getElementById('mov-nota').value.trim();
   if(!monto)return;
   const t=T();if(!t)return;
   const det=JSON.parse(JSON.stringify(t.pagosDetalle||{}));
-  const key=`${uid}-${fi}`;
-  if(!det[key])det[key]=[];
-  det[key].push({monto,fecha,nota});
+  if(!det[uid])det[uid]=[];
+  det[uid].push({monto,fecha,nota});
+  // Ordenar por fecha
+  det[uid].sort((a,b)=>a.fecha>b.fecha?1:-1);
   await fupd(`torneos/${S.torneoActivo}`,{pagosDetalle:det});
-  cerrarModalPago();
+  cerrarModal();
 };
 
-window.eliminarMovPago=async function(uid,fi,mi){
+window.eliminarMov=async function(uid,mi){
   if(!confirm('¿Eliminar este pago?'))return;
   const t=T();if(!t)return;
   const det=JSON.parse(JSON.stringify(t.pagosDetalle||{}));
-  const key=`${uid}-${fi}`;
-  if(det[key])det[key].splice(mi,1);
+  if(det[uid])det[uid].splice(mi,1);
   await fupd(`torneos/${S.torneoActivo}`,{pagosDetalle:det});
 };
 
@@ -784,8 +806,8 @@ function rtPos(el){
   const uids=partsT();const isAdmin=S.rol==='admin';
   const ranking=uids.map(uid=>({uid,nombre:nombrePart(uid),pts:totalG(uid,t,m)})).sort((a,b)=>b.pts-a.pts);
   const cuota=t.cuota||500;
-  const totalRec=uids.reduce((s,uid)=>(t.fechas||[]).reduce((ss,_,fi)=>ss+((t.pagosDetalle?.[`${uid}-${fi}`]||[]).reduce((sm,m)=>sm+m.monto,0)),s),0);
-  const deudores=uids.filter(uid=>(t.fechas||[]).some((_,fi)=>!ausente(fi,uid)&&((t.pagosDetalle?.[`${uid}-${fi}`]||[]).reduce((s,m)=>s+m.monto,0))<(t.cuotasFecha?.[fi]??cuota))).length;
+  const totalRec=uids.reduce((s,uid)=>s+(t.pagosDetalle?.[uid]||[]).reduce((ss,m)=>ss+m.monto,0),0);
+  const deudores=uids.filter(uid=>{const {saldo}=distribuirPagos(uid,t)||{};const totalPag=(t.pagosDetalle?.[uid]||[]).reduce((s,m)=>s+m.monto,0);const totalDebe=(t.fechas||[]).reduce((s,_,fi)=>s+(ausente(fi,uid)?0:cuotaFecha(fi)),0);return totalPag<totalDebe;}).length;
   el.innerHTML=`<div class="metrics-grid" style="margin-top:4px">
     <div class="metric"><div class="metric-val">${uids.length}</div><div class="metric-lbl">Participantes</div></div>
     <div class="metric"><div class="metric-val">${(t.fechas||[]).length}</div><div class="metric-lbl">Fechas</div></div>
@@ -794,8 +816,8 @@ function rtPos(el){
   ${!ranking.length?'<p class="sub">Sin participantes.</p>':`<div style="overflow-x:auto"><table>
     <thead><tr><th>#</th><th>Participante</th><th>Total</th>${(t.fechas||[]).map(f=>`<th style="white-space:nowrap">${f.nombre}</th>`).join('')}${isAdmin?'<th>Pagos</th>':''}</tr></thead>
     <tbody>${ranking.map((r,i)=>{
-      const pagado=(t.fechas||[]).reduce((s,_,fi)=>s+((t.pagosDetalle?.[`${r.uid}-${fi}`]||[]).reduce((ss,m)=>ss+m.monto,0)),0);
-      const debe=(t.fechas||[]).reduce((s,_,fi)=>s+(ausente(fi,r.uid)?0:(t.cuotasFecha?.[fi]??cuota)),0);
+      const pagado=(t.pagosDetalle?.[r.uid]||[]).reduce((s,m)=>s+m.monto,0);
+      const debe=(t.fechas||[]).reduce((s,_,fi)=>s+(ausente(fi,r.uid)?0:cuotaFecha(fi)),0);
       const saldo=pagado-debe;const esMio=r.uid===S.uid;
       return`<tr ${esMio?'style="background:var(--c-info-bg)"':''}>
         <td>${i+1}</td><td style="font-weight:${i<3?'500':'400'};white-space:nowrap">${i===0?'🥇 ':i===1?'🥈 ':i===2?'🥉 ':''}${r.nombre}${esMio?' ⬅':''}</td>
