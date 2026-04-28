@@ -140,7 +140,7 @@ function suscribirTorneos(){
 function renderLogin(){
   setApp(`<div class="lw"><div class="lc">
     <div class="ll">⚽</div><h1 class="lt">Prode Fútbol</h1><p class="ls">Ingresá para participar</p>
-    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v1.8</p>
+    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v2.0</p>
     <button class="btn-google" onclick="loginGoogle()"><svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 6.29C4.672 4.163 6.656 3.58 9 3.58z"/></svg>Entrar con Google</button>
     <div class="ld">o con tu mail</div>
     <input id="login-mail" class="li" type="email" placeholder="tu@mail.com"/>
@@ -634,75 +634,126 @@ function rtPronos(el){
   const fechasV=isAdmin?fechas:fechas.filter(f=>f.estado==='activa');
   if(!fechasV.length){el.innerHTML=`<p class="sub" style="margin-top:8px">${isAdmin?'No hay fechas.':'No hay fechas activas en este momento.'}</p>`;return;}
   let fiV=parseInt(el.dataset.fi||'0');if(fiV>=fechasV.length)fiV=0;
-  const fObj=fechasV[fiV];const fiReal=fechas.indexOf(fObj);
   el.dataset.fi=fiV;
-  const uids=isAdmin?partsT():partsT().filter(u=>u===S.uid);
-  const sinPron=uids.reduce((acc,uid)=>{
-    if(ausente(fiReal,uid))return acc;
-    const falt=(fObj.partidos||[]).filter((_,pi)=>!(t.pronosticos?.[`${fiReal}-${pi}-${uid}-signo`])).length;
-    if(falt>0)acc.push({uid,nombre:nombrePart(uid),falt});return acc;
-  },[]);
   const busqPron=el.dataset.busqPron||'';
-  const uidsFilP=uids.filter(uid=>{
+
+  // ── Header fijo: botones de fecha + buscador ─────────────
+  // Solo se recrea si no existe (para no perder foco del buscador)
+  if(!document.getElementById('pron-header')){
+    el.innerHTML=`
+      <div id="pron-header" style="margin-bottom:4px">
+        <div id="pron-fecha-btns" style="display:flex;gap:5px;flex-wrap:wrap;margin-top:4px;margin-bottom:4px"></div>
+      <div style="display:flex;gap:12px;margin-bottom:8px;font-size:11px;color:var(--c-text2)">
+        <span><span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:var(--c-success);margin-right:4px;vertical-align:middle"></span>Fecha activa</span>
+        <span><span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:var(--c-info);margin-right:4px;vertical-align:middle"></span>Fecha seleccionada</span>
+      </div>
+        <input id="pron-busq" type="search" placeholder="🔍 Buscar participante (nombre o DNI)..."
+          style="width:100%;max-width:360px;padding:6px 10px;font-size:13px;border:1px solid var(--c-border);border-radius:8px;background:var(--c-bg);color:var(--c-text)"
+          oninput="filtrarPronos(this.value)"/>
+      </div>
+      <div id="pron-lista"></div>`;
+  }
+  // Siempre actualizar botones de fecha (cambia selección/estado)
+  const btnDiv=document.getElementById('pron-fecha-btns');
+  if(btnDiv){
+    btnDiv.innerHTML=fechasV.map((f,i)=>{
+      const esActiva=f.estado==='activa';
+      const esSelec=i===fiV;
+      let bg='',color='',border='';
+      if(esSelec&&esActiva){bg='var(--c-success)';color='#fff';border='var(--c-success)';}
+      else if(esSelec){bg='var(--c-info)';color='#fff';border='var(--c-info)';}
+      else if(esActiva){bg='';color='var(--c-success)';border='var(--c-success)';}
+      const style=`background:${bg};color:${color||'inherit'};border-color:${border||'var(--c-border)'}`;
+      const label=f.nombre+(esActiva&&!esSelec?' 🟢':'');
+      return`<button class="btn btn-sm" onclick="cambiarFP(${i})" style="${style}">${label}</button>`;
+    }).join('');
+  }
+  // Restaurar valor buscador sin perder foco
+  const busqInput=document.getElementById('pron-busq');
+  if(busqInput&&document.activeElement!==busqInput)busqInput.value=busqPron;
+
+  // ── Renderizar lista de participantes ────────────────────
+  const listaEl=document.getElementById('pron-lista');
+  if(listaEl)renderPronLista(listaEl,t,m,fechas,fechasV,fiV,isAdmin,busqPron);
+}
+
+function renderPronLista(listaEl,t,m,fechas,fechasV,fiV,isAdmin,busqPron){
+  // Permitir llamada desde filtrarPronos recuperando contexto
+  if(!t){
+    t=T();m=meta();fechas=t?.fechas||[];
+    const isAdm=S.rol==='admin';
+    fechasV=isAdm?fechas:fechas.filter(f=>f.estado==='activa');
+    fiV=parseInt(document.getElementById('tab-content')?.dataset.fi||'0');
+    if(fiV>=fechasV.length)fiV=0;
+    isAdmin=isAdm;
+    busqPron=document.getElementById('tab-content')?.dataset.busqPron||'';
+  }
+  if(!t)return;
+  const fObj=fechasV[fiV];
+  if(!fObj){listaEl.innerHTML='';return;}
+  const fiReal=fechas.indexOf(fObj);
+  const uids=isAdmin?partsT():partsT().filter(u=>u===S.uid);
+  const uidsF=uids.filter(uid=>{
     if(!busqPron)return true;
     const p=allParts()[uid]||{};
     return(`${p.nombre||''} ${p.apellido||''} ${p.dni||''}`).toLowerCase().includes(busqPron.toLowerCase());
   });
-  el.innerHTML=`
-    <div style="display:flex;gap:6px;align-items:center;margin-top:4px;flex-wrap:wrap">
-      ${fechasV.map((f,i)=>`<button class="btn btn-sm ${i===fiV?'btn-primary':''}" onclick="cambiarFP(${i})" style="border-color:${f.estado==='activa'?'var(--c-success)':'var(--c-border)'}">${f.nombre}</button>`).join('')}
-    </div>
-    <div style="margin:8px 0"><input type="search" placeholder="\uD83D\uDD0D Buscar participante (nombre o DNI)..." value="${busqPron}" style="width:100%;max-width:360px;padding:6px 10px;font-size:13px;border:1px solid var(--c-border);border-radius:8px;background:var(--c-bg);color:var(--c-text)" oninput="filtrarPronos(this.value)"/></div>
-    ${sinPron.length
-      ?`<div style="background:var(--c-warn-bg);border:1px solid var(--c-warn-border);border-radius:8px;padding:8px 12px;margin:8px 0;font-size:12px;color:var(--c-warn)">⚠️ Sin pronosticar: ${sinPron.map(s=>`${s.nombre} (${s.falt} partido${s.falt>1?'s':''})`).join(' · ')}</div>`
-      :`<div style="background:var(--c-success-bg);border:1px solid var(--c-success-border);border-radius:8px;padding:6px 12px;margin:8px 0;font-size:12px;color:var(--c-success)">✅ Todos los pronósticos cargados</div>`}
-    ${!(fObj.partidos||[]).length?'<p class="sub">Sin partidos en esta fecha.</p>':uidsFilP.map(uid=>{
-      const aus=ausente(fiReal,uid);const p=allParts()[uid]||{};
-      const nombre=p.nombre?`${p.nombre} ${p.apellido}`:uid;
-      let totalPts=null;
-      const bloques=(fObj.partidos||[]).map((pt,pi)=>{
-        const pts=calcPuntos(fiReal,pi,uid,t,m);if(pts!==null)totalPts=(totalPts||0)+pts;
-        const bk=`${fiReal}-${pi}-${uid}`;
-        const signo=pronBuffer[bk+'-signo']!==undefined?pronBuffer[bk+'-signo']:(t.pronosticos?.[`${fiReal}-${pi}-${uid}-signo`]||'');
-        const pron=pronBuffer[bk]||t.pronosticos?.[`${fiReal}-${pi}-${uid}`]||{gl:'',gv:''};
-        const editable=isAdmin||uid===S.uid;
-        return`<div class="partido-block">
-          <div class="partido-header"><div class="team-name" style="font-size:11px">${pt.local}</div><div class="vs-label">vs</div><div class="team-name" style="font-size:11px">${pt.visita}</div></div>
-          ${m.sistema==='1x2'
-            ?`<div class="signos"><button class="signo-btn ${signo==='1'?'sel-1':''}" ${!editable?'disabled':''} onclick="bufS(${fiReal},${pi},'${uid}','1')">1</button><button class="signo-btn ${signo==='X'?'sel-X':''}" ${!editable?'disabled':''} onclick="bufS(${fiReal},${pi},'${uid}','X')">X</button><button class="signo-btn ${signo==='2'?'sel-2':''}" ${!editable?'disabled':''} onclick="bufS(${fiReal},${pi},'${uid}','2')">2</button></div>`
-            :`<div class="score-wrap"><input class="score-inp" type="number" min="0" value="${pron.gl}" placeholder="-" ${!editable?'readonly':''} onchange="bufE(${fiReal},${pi},'${uid}','gl',this.value)"/><span style="color:#aaa">-</span><input class="score-inp" type="number" min="0" value="${pron.gv}" placeholder="-" ${!editable?'readonly':''} onchange="bufE(${fiReal},${pi},'${uid}','gv',this.value)"/></div>`}
-          ${pts!==null?`<div style="text-align:center;margin-top:5px"><span class="badge ${pts>0?'badge-green':'badge-red'}">${pts} pt${pts!==1?'s':''}</span></div>`:''}
-        </div>`;
-      }).join('');
-      const editable=isAdmin||uid===S.uid;
-      return`<div class="card" ${aus?'style="opacity:.55"':''}>
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:6px">
-          <p style="font-weight:500;font-size:13px">${nombre}</p>
-          <div style="display:flex;gap:6px;align-items:center">
-            ${isAdmin?`<button class="ausencia-toggle ${aus?'ausente':''}" onclick="toggleAus(${fiReal},'${uid}')">${aus?'⛔ No juega':'✓ Juega'}</button>`:''}
-            ${editable&&!aus?`<button class="btn btn-sm btn-primary" onclick="guardarPron(${fiReal},'${uid}')">💾 Guardar pronósticos</button>`:''}
-          </div>
-        </div>
-        ${aus?'<p style="font-size:12px;color:var(--c-text2);text-align:center;padding:6px 0">No juega en esta fecha</p>'
-          :bloques+(totalPts!==null?`<div style="text-align:right;font-size:11px;color:var(--c-text2);margin-top:4px">Total fecha: <strong>${totalPts} pts</strong></div>`:'')}
-        ${editable&&!aus?`<p id="smsg-${uid.slice(-6)}" style="font-size:11px;text-align:right;margin-top:4px;min-height:14px;color:var(--c-success)"></p>`:''}
-      </div>`;
-    }).join('')}`;
-}
 
-window.bufS=function(fi,pi,uid,signo){const k=`${fi}-${pi}-${uid}-signo`;pronBuffer[k]=pronBuffer[k]===signo?'':signo;const el=document.getElementById('tab-content');if(el)renderTab('pronosticos');};
-window.bufE=function(fi,pi,uid,campo,val){const key=`${fi}-${pi}-${uid}`;if(!pronBuffer[key])pronBuffer[key]={gl:'',gv:''};pronBuffer[key][campo]=val;const p=pronBuffer[key];if(p.gl!==''&&p.gv!==''){const l=parseInt(p.gl),vv=parseInt(p.gv);pronBuffer[`${fi}-${pi}-${uid}-signo`]=l>vv?'1':l===vv?'X':'2';}};
-window.guardarPron=async function(fi,uid){
-  const t=T();if(!t)return;
-  const prons=JSON.parse(JSON.stringify(t.pronosticos||{}));
-  Object.entries(pronBuffer).forEach(([k,val])=>{if(k.startsWith(`${fi}-`)&&k.includes(`-${uid}`))prons[k]=val;});
-  Object.keys(pronBuffer).forEach(k=>{if(k.startsWith(`${fi}-`)&&k.includes(`-${uid}`))delete pronBuffer[k];});
-  await fupd(`torneos/${S.torneoActivo}`,{pronosticos:prons});
-  const el=document.getElementById(`smsg-${uid.slice(-6)}`);
-  if(el){el.textContent='✅ Guardado';setTimeout(()=>{if(el)el.textContent='';},2500);}
-};
+  const sinPron=uids.reduce((acc,uid)=>{
+    if(ausente(fiReal,uid))return acc;
+    const falt=(fObj.partidos||[]).filter((_,pi)=>!(t.pronosticos?.[`${fiReal}-${pi}-${uid}-signo`])).length;
+    if(falt>0)acc.push({uid,nombre:nombrePart(uid),falt});
+    return acc;
+  },[]);
+
+  let html=sinPron.length
+    ?`<div style="background:var(--c-warn-bg);border:1px solid var(--c-warn-border);border-radius:8px;padding:8px 12px;margin:8px 0;font-size:12px;color:var(--c-warn)">⚠️ Sin pronosticar: ${sinPron.map(s=>`${s.nombre} (${s.falt} partido${s.falt>1?'s':''})`).join(' · ')}</div>`
+    :`<div style="background:var(--c-success-bg);border:1px solid var(--c-success-border);border-radius:8px;padding:6px 12px;margin:8px 0;font-size:12px;color:var(--c-success)">✅ Todos los pronósticos cargados</div>`;
+
+  if(!(fObj.partidos||[]).length){listaEl.innerHTML=html+'<p class="sub">Sin partidos en esta fecha.</p>';return;}
+
+  html+=uidsF.map(uid=>{
+    const aus=ausente(fiReal,uid);const p=allParts()[uid]||{};
+    const nombre=p.nombre?`${p.nombre} ${p.apellido}`:uid;
+    let totalPts=null;
+    const bloques=(fObj.partidos||[]).map((pt,pi)=>{
+      const pts=calcPuntos(fiReal,pi,uid,t,m);if(pts!==null)totalPts=(totalPts||0)+pts;
+      const signo=t.pronosticos?.[`${fiReal}-${pi}-${uid}-signo`]||'';
+      const pron=t.pronosticos?.[`${fiReal}-${pi}-${uid}`]||{gl:'',gv:''};
+      const editable=isAdmin||uid===S.uid;
+      return`<div class="partido-block">
+        <div class="partido-header"><div class="team-name" style="font-size:11px">${pt.local}</div><div class="vs-label">vs</div><div class="team-name" style="font-size:11px">${pt.visita}</div></div>
+        ${m.sistema==='1x2'
+          ?`<div class="signos"><button class="signo-btn ${signo==='1'?'sel-1':''}" ${!editable?'disabled':''} onclick="bufS(${fiReal},${pi},'${uid}','1')">1</button><button class="signo-btn ${signo==='X'?'sel-X':''}" ${!editable?'disabled':''} onclick="bufS(${fiReal},${pi},'${uid}','X')">X</button><button class="signo-btn ${signo==='2'?'sel-2':''}" ${!editable?'disabled':''} onclick="bufS(${fiReal},${pi},'${uid}','2')">2</button></div>`
+          :`<div class="score-wrap"><input class="score-inp" type="number" min="0" value="${pron.gl}" placeholder="-" ${!editable?'readonly':''} onchange="bufE(${fiReal},${pi},'${uid}','gl',this.value)"/><span style="color:#aaa">-</span><input class="score-inp" type="number" min="0" value="${pron.gv}" placeholder="-" ${!editable?'readonly':''} onchange="bufE(${fiReal},${pi},'${uid}','gv',this.value)"/></div>`}
+        ${pts!==null?`<div style="text-align:center;margin-top:5px"><span class="badge ${pts>0?'badge-green':'badge-red'}">${pts} pt${pts!==1?'s':''}</span></div>`:''}
+      </div>`;
+    }).join('');
+    const editable=isAdmin||uid===S.uid;
+    return`<div class="card" ${aus?'style="opacity:.55"':''}>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:6px">
+        <p style="font-weight:500;font-size:13px">${nombre}</p>
+        <div style="display:flex;gap:6px;align-items:center">
+          ${isAdmin?`<button class="ausencia-toggle ${aus?'ausente':''}" onclick="toggleAus(${fiReal},'${uid}')">${aus?'⛔ No juega':'✓ Juega'}</button>`:''}
+          ${editable&&!aus?`<button class="btn btn-sm btn-primary" onclick="guardarPron(${fiReal},'${uid}')">💾 Guardar</button>`:''}
+        </div>
+      </div>
+      ${aus?'<p style="font-size:12px;color:var(--c-text2);text-align:center;padding:6px 0">No juega en esta fecha</p>'
+        :bloques+(totalPts!==null?`<div style="text-align:right;font-size:11px;color:var(--c-text2);margin-top:4px">Total fecha: <strong>${totalPts} pts</strong></div>`:'')}
+      ${editable&&!aus?`<p id="smsg-${uid.slice(-6)}" style="font-size:11px;text-align:right;margin-top:4px;min-height:14px;color:var(--c-success)"></p>`:''}
+    </div>`;
+  }).join('');
+
+  listaEl.innerHTML=html;
+}
 window.cambiarFP=function(fi){const el=document.getElementById('tab-content');if(!el)return;el.dataset.fi=fi;renderTab('pronosticos');};
-window.filtrarPronos=function(val){const el=document.getElementById('tab-content');if(!el)return;el.dataset.busqPron=val;renderTab('pronosticos');};
+window.filtrarPronos=function(val){
+  const el=document.getElementById('tab-content');if(!el)return;
+  el.dataset.busqPron=val;
+  const listaEl=document.getElementById('pron-lista');
+  if(listaEl) renderPronLista(listaEl,null,null,null,null,null,null,val);
+  else renderTab('pronosticos');
+};
 window.toggleAus=async function(fi,uid){
   const t=T();if(!t)return;
   const aus=JSON.parse(JSON.stringify(t.ausencias||{}));
@@ -777,7 +828,7 @@ function rtPagos(el){
     const p=allParts()[uid]||{};
     return(`${p.nombre||''} ${p.apellido||''} ${p.dni||''}`).toLowerCase().includes(busqPagos.toLowerCase());
   });
-  const buscadorPagos=`<div style="margin-bottom:8px"><input type="search" placeholder="\uD83D\uDD0D Buscar por nombre o DNI..." value="${busqPagos}" style="width:100%;max-width:360px;padding:6px 10px;font-size:13px;border:1px solid var(--c-border);border-radius:8px;background:var(--c-bg);color:var(--c-text)" oninput="filtrarPagos(this.value)"/></div>`;
+  const buscadorPagos=`<div style="margin-bottom:8px"><input type="search" placeholder="\uD83D\uDD0D Buscar por nombre o DNI..." value="${busqPagos}" style="width:100%;max-width:360px;padding:6px 10px;font-size:13px;border:1px solid var(--c-border);border-radius:8px;background:var(--c-bg);color:var(--c-text)" id="pagos-busq" oninput="filtrarPagos(this.value)"/></div>`;
   const cfgBase=`<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
     <label style="font-size:12px;white-space:nowrap">Cuota base:</label>
     <input type="number" min="0" step="100" value="${cuotaBase}"
@@ -892,7 +943,17 @@ function rtPagos(el){
   el.dataset.vista=vista;
 }
 
-window.filtrarPagos=function(val){const el=document.getElementById('tab-content');if(!el)return;el.dataset.busqPagos=val;renderTab('pagos');};
+window.filtrarPagos=function(val){
+  const el=document.getElementById('tab-content');if(!el)return;
+  el.dataset.busqPagos=val;
+  // Re-renderizar el tab de pagos pero preservar el foco del input
+  const focused=document.activeElement;
+  renderTab('pagos');
+  // Restaurar foco
+  if(focused&&focused.id==='pagos-busq'){
+    setTimeout(()=>{const inp=document.getElementById('pagos-busq');if(inp){inp.focus();inp.value=val;const len=val.length;inp.setSelectionRange(len,len);}},10);
+  }
+};
 window.setPagosVista=function(vista){
   const el=document.getElementById('tab-content');if(!el)return;
   el.dataset.vista=vista;renderTab('pagos');
