@@ -48,7 +48,12 @@ function allParts(){return cfg().participantes||{};}
 function torneos(){return cfg().torneos||[];}
 function T(){return S.torneoActivo?S.data.torneos[S.torneoActivo]:null;}
 function partsT(){return T()?.participantes||[];}
-function ausente(fi,uid){return!!(T()?.ausencias?.[`${fi}-${uid}`]);}
+function ausente(fi,uid){
+  const aus=T()?.ausencias||{};
+  const k=`${fi}-${uid}`;
+  if(!(k in aus))return true;
+  return aus[k]!==false;
+}
 function meta(){return torneos().find(x=>x.id===S.torneoActivo)||{};}
 function nombrePart(uid){const p=allParts()[uid];return p?`${p.nombre} ${p.apellido}`:uid;}
 
@@ -135,7 +140,7 @@ function suscribirTorneos(){
 function renderLogin(){
   setApp(`<div class="lw"><div class="lc">
     <div class="ll">⚽</div><h1 class="lt">Prode Fútbol</h1><p class="ls">Ingresá para participar</p>
-    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v1.7</p>
+    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v1.8</p>
     <button class="btn-google" onclick="loginGoogle()"><svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 6.29C4.672 4.163 6.656 3.58 9 3.58z"/></svg>Entrar con Google</button>
     <div class="ld">o con tu mail</div>
     <input id="login-mail" class="li" type="email" placeholder="tu@mail.com"/>
@@ -637,14 +642,21 @@ function rtPronos(el){
     const falt=(fObj.partidos||[]).filter((_,pi)=>!(t.pronosticos?.[`${fiReal}-${pi}-${uid}-signo`])).length;
     if(falt>0)acc.push({uid,nombre:nombrePart(uid),falt});return acc;
   },[]);
+  const busqPron=el.dataset.busqPron||'';
+  const uidsFilP=uids.filter(uid=>{
+    if(!busqPron)return true;
+    const p=allParts()[uid]||{};
+    return(`${p.nombre||''} ${p.apellido||''} ${p.dni||''}`).toLowerCase().includes(busqPron.toLowerCase());
+  });
   el.innerHTML=`
     <div style="display:flex;gap:6px;align-items:center;margin-top:4px;flex-wrap:wrap">
       ${fechasV.map((f,i)=>`<button class="btn btn-sm ${i===fiV?'btn-primary':''}" onclick="cambiarFP(${i})" style="border-color:${f.estado==='activa'?'var(--c-success)':'var(--c-border)'}">${f.nombre}</button>`).join('')}
     </div>
+    <div style="margin:8px 0"><input type="search" placeholder="\uD83D\uDD0D Buscar participante (nombre o DNI)..." value="${busqPron}" style="width:100%;max-width:360px;padding:6px 10px;font-size:13px;border:1px solid var(--c-border);border-radius:8px;background:var(--c-bg);color:var(--c-text)" oninput="filtrarPronos(this.value)"/></div>
     ${sinPron.length
       ?`<div style="background:var(--c-warn-bg);border:1px solid var(--c-warn-border);border-radius:8px;padding:8px 12px;margin:8px 0;font-size:12px;color:var(--c-warn)">⚠️ Sin pronosticar: ${sinPron.map(s=>`${s.nombre} (${s.falt} partido${s.falt>1?'s':''})`).join(' · ')}</div>`
       :`<div style="background:var(--c-success-bg);border:1px solid var(--c-success-border);border-radius:8px;padding:6px 12px;margin:8px 0;font-size:12px;color:var(--c-success)">✅ Todos los pronósticos cargados</div>`}
-    ${!(fObj.partidos||[]).length?'<p class="sub">Sin partidos en esta fecha.</p>':uids.map(uid=>{
+    ${!(fObj.partidos||[]).length?'<p class="sub">Sin partidos en esta fecha.</p>':uidsFilP.map(uid=>{
       const aus=ausente(fiReal,uid);const p=allParts()[uid]||{};
       const nombre=p.nombre?`${p.nombre} ${p.apellido}`:uid;
       let totalPts=null;
@@ -690,7 +702,28 @@ window.guardarPron=async function(fi,uid){
   if(el){el.textContent='✅ Guardado';setTimeout(()=>{if(el)el.textContent='';},2500);}
 };
 window.cambiarFP=function(fi){const el=document.getElementById('tab-content');if(!el)return;el.dataset.fi=fi;renderTab('pronosticos');};
-window.toggleAus=async function(fi,uid){const t=T();if(!t)return;const aus=JSON.parse(JSON.stringify(t.ausencias||{}));const k=`${fi}-${uid}`;aus[k]=!aus[k];await fupd(`torneos/${S.torneoActivo}`,{ausencias:aus});};
+window.filtrarPronos=function(val){const el=document.getElementById('tab-content');if(!el)return;el.dataset.busqPron=val;renderTab('pronosticos');};
+window.toggleAus=async function(fi,uid){
+  const t=T();if(!t)return;
+  const aus=JSON.parse(JSON.stringify(t.ausencias||{}));
+  const k=`${fi}-${uid}`;
+  const estaAusente=ausente(fi,uid);
+  if(estaAusente){
+    const {totalPagado,totalDebe}=distribuirPagos(uid,t);
+    const saldoActual=totalPagado-totalDebe;
+    const cf=cuotaFecha(fi);
+    if(saldoActual<cf){
+      const p=allParts()[uid]||{};
+      const nombre=p.nombre?`${p.nombre} ${p.apellido}`:uid;
+      const ok=confirm(`\u26a0\ufe0f ${nombre} no tiene saldo suficiente.\nSaldo disponible: $${saldoActual.toLocaleString()} / Cuota: $${cf.toLocaleString()}\n\n\u00bfMarcar igual como "Juega"?`);
+      if(!ok)return;
+    }
+    aus[k]=false;
+  } else {
+    aus[k]=true;
+  }
+  await fupd(`torneos/${S.torneoActivo}`,{ausencias:aus});
+};
 
 // ── TAB PAGOS ────────────────────────────────────────────────
 function cuotaFecha(fi){const t=T();if(!t)return 0;return t.cuotasFecha?.[fi]??t.cuota??500;}
@@ -738,6 +771,13 @@ function rtPagos(el){
     <button class="btn btn-sm ${vista==='detalle'?'btn-primary':''}" onclick="setPagosVista('detalle')">📋 Movimientos</button>
   </div>`;
 
+  const busqPagos=el.dataset.busqPagos||'';
+  const uidsFilPag=uids.filter(uid=>{
+    if(!busqPagos)return true;
+    const p=allParts()[uid]||{};
+    return(`${p.nombre||''} ${p.apellido||''} ${p.dni||''}`).toLowerCase().includes(busqPagos.toLowerCase());
+  });
+  const buscadorPagos=`<div style="margin-bottom:8px"><input type="search" placeholder="\uD83D\uDD0D Buscar por nombre o DNI..." value="${busqPagos}" style="width:100%;max-width:360px;padding:6px 10px;font-size:13px;border:1px solid var(--c-border);border-radius:8px;background:var(--c-bg);color:var(--c-text)" oninput="filtrarPagos(this.value)"/></div>`;
   const cfgBase=`<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
     <label style="font-size:12px;white-space:nowrap">Cuota base:</label>
     <input type="number" min="0" step="100" value="${cuotaBase}"
@@ -765,9 +805,10 @@ function rtPagos(el){
       </th>`;
     }).join('');
 
-    const filas=uids.map(uid=>{
+    const filas=uidsFilPag.map(uid=>{
       const p=allParts()[uid]||{};
       const nombre=p.nombre?`${p.nombre} ${p.apellido}`:uid;
+      const dniTag=p.dni?` <span style="font-size:10px;color:var(--c-text3)">[${p.dni}]</span>`:'';
       const {cobertura,totalPagado,totalDebe,saldo}=distribuirPagos(uid,t);
       const celdas=fechas.map((f,fi)=>{
         const cob=cobertura[fi];
@@ -783,7 +824,7 @@ function rtPagos(el){
         </td>`;
       }).join('');
       return`<tr>
-        <td style="font-weight:500;white-space:nowrap;position:sticky;left:0;background:var(--c-bg);z-index:1;border-right:1px solid var(--c-border)">${nombre}</td>
+        <td style="font-weight:500;white-space:nowrap;position:sticky;left:0;background:var(--c-bg);z-index:1;border-right:1px solid var(--c-border)">${nombre}${dniTag}</td>
         ${celdas}
         <td style="white-space:nowrap">$${totalDebe.toLocaleString()}</td>
         <td style="white-space:nowrap">$${totalPagado.toLocaleString()}</td>
@@ -791,7 +832,7 @@ function rtPagos(el){
       </tr>`;
     }).join('');
 
-    el.innerHTML=tabsBtns+cfgBase+`<div style="overflow-x:auto;max-width:100%" id="tabla-pagos-wrap"><table style="min-width:max-content;width:100%">
+    el.innerHTML=tabsBtns+buscadorPagos+cfgBase+`<div style="overflow-x:auto;max-width:100%" id="tabla-pagos-wrap"><table style="min-width:max-content;width:100%">
       <thead><tr>
         <th style="position:sticky;left:0;background:var(--c-bg2);z-index:2;border-right:1px solid var(--c-border)">Participante</th>
         ${headerCuotas}
@@ -817,15 +858,16 @@ function rtPagos(el){
 
   } else {
     // Vista movimientos: lista simple por participante
-    const bloques=uids.map(uid=>{
+    const bloques=uidsFilPag.map(uid=>{
       const p=allParts()[uid]||{};
       const nombre=p.nombre?`${p.nombre} ${p.apellido}`:uid;
+      const dniTag=p.dni?` <span style="font-size:11px;color:var(--c-text3)">[DNI ${p.dni}]</span>`:'';
       const movs=t.pagosDetalle?.[uid]||[];
       const total=movs.reduce((s,m)=>s+m.monto,0);
       const {totalDebe,saldo}=distribuirPagos(uid,t);
       return`<div class="card">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:6px">
-          <span style="font-weight:500;font-size:13px">${nombre}</span>
+          <span style="font-weight:500;font-size:13px">${nombre}</span>${dniTag}
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
             <span style="font-size:12px">Total pagado: <strong>$${total.toLocaleString()}</strong></span>
             <span style="font-size:12px">Debe: <strong>$${totalDebe.toLocaleString()}</strong></span>
@@ -845,11 +887,12 @@ function rtPagos(el){
       </div>`;
     }).join('');
 
-    el.innerHTML=tabsBtns+bloques+`<div id="modal-pago" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:999;align-items:center;justify-content:center"></div>`;
+    el.innerHTML=tabsBtns+buscadorPagos+bloques+`<div id="modal-pago" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:999;align-items:center;justify-content:center"></div>`;
   }
   el.dataset.vista=vista;
 }
 
+window.filtrarPagos=function(val){const el=document.getElementById('tab-content');if(!el)return;el.dataset.busqPagos=val;renderTab('pagos');};
 window.setPagosVista=function(vista){
   const el=document.getElementById('tab-content');if(!el)return;
   el.dataset.vista=vista;renderTab('pagos');
