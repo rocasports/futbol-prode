@@ -613,8 +613,9 @@ function rtPagos(el){
   const cuotaBase=t.cuota||500;
   const vista=el.dataset.vista||'resumen';
 
-  // FIX 1: no re-renderizar si hay un input con foco en este tab
-  if(document.activeElement&&el.contains(document.activeElement))return;
+  // FIX 1: no re-renderizar si hay un INPUT con foco activo en este tab
+  const focusedEl=document.activeElement;
+  if(focusedEl&&(focusedEl.tagName==='INPUT'||focusedEl.tagName==='TEXTAREA')&&el.contains(focusedEl))return;
 
   const tabsBtns=`<div style="display:flex;gap:6px;margin-bottom:12px">
     <button class="btn btn-sm ${vista==='resumen'?'btn-primary':''}" onclick="setPagosVista('resumen')">📊 Resumen</button>
