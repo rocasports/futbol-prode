@@ -57,6 +57,181 @@ function ausente(fi,uid){
 function meta(){return torneos().find(x=>x.id===S.torneoActivo)||{};}
 function nombrePart(uid){const p=allParts()[uid];return p?`${p.nombre} ${p.apellido}`:uid;}
 
+// ── HELPERS (definidas antes de ser usadas) ─────────────────
+function cuotaFecha(fi){
+  const t=T();if(!t)return 0;
+  return t.cuotasFecha?.[fi]??t.cuota??500;
+}
+
+function fechaActivaIdx(){
+  const t=T();if(!t)return -1;
+  return(t.fechas||[]).findIndex(f=>f.estado==='activa');
+}
+
+function cantJugadas(fi,uid){
+  return T()?.jugadas?.[`${fi}-${uid}`]||1;
+}
+
+async function setJugadas(fi,uid,n){
+  const t=T();if(!t)return;
+  const jugadas=JSON.parse(JSON.stringify(t.jugadas||{}));
+  jugadas[`${fi}-${uid}`]=Math.max(1,parseInt(n)||1);
+  await fupd(`torneos/${S.torneoActivo}`,{jugadas});
+}
+
+function distribuirPagos(uid,t){
+  const fechas=t.fechas||[];
+  const fiActiva=fechas.findIndex(f=>f.estado==='activa');
+  const hasta=fiActiva>=0?fiActiva:fechas.reduce((last,f,i)=>f.estado==='terminada'?i:last,-1);
+  const movs=t.pagosDetalle?.[uid]||[];
+  const totalPagado=movs.reduce((s,m)=>s+m.monto,0);
+  let restante=totalPagado;
+  const cobertura={};
+  let totalDebe=0;
+  for(let fi=0;fi<fechas.length;fi++){
+    if(fi>hasta){cobertura[fi]='futuro';continue;}
+    if(ausente(fi,uid)){cobertura[fi]='ausente';continue;}
+    const nJug=cantJugadas(fi,uid);
+    const cf=cuotaFecha(fi)*nJug;
+    totalDebe+=cf;
+    const cubre=Math.min(restante,cf);
+    cobertura[fi]=cubre;
+    restante=Math.max(0,restante-cf);
+  }
+  return{cobertura,totalPagado,totalDebe,saldo:totalPagado-totalDebe};
+}
+
+function calcPuntosJug(fi,pi,uid,j,t,m){
+  if(ausente(fi,uid))return null;
+  const rs=t.resultados?.[`${fi}-${pi}-signo`]||'';if(!rs)return null;
+  if(m.sistema==='1x2'){
+    const ps=t.pronosticos?.[`${fi}-${pi}-${uid}-${j}-signo`]||'';
+    if(!ps)return null;return ps===rs?1:0;
+  }
+  const pron=t.pronosticos?.[`${fi}-${pi}-${uid}-${j}`]||{};
+  const res=t.resultados?.[`${fi}-${pi}`]||{};
+  if(pron.gl===undefined||pron.gl==='')return null;
+  if(res.gl===undefined||res.gl==='')return null;
+  const ps=t.pronosticos?.[`${fi}-${pi}-${uid}-${j}-signo`]||'';
+  if(parseInt(pron.gl)===parseInt(res.gl)&&parseInt(pron.gv)===parseInt(res.gv))return 3;
+  return ps===rs?1:0;
+}
+
+function calcPuntos(fi,pi,uid,t,m){
+  if(ausente(fi,uid))return null;
+  const rs=t.resultados?.[`${fi}-${pi}-signo`]||'';if(!rs)return null;
+  if(m.sistema==='1x2'){const ps=t.pronosticos?.[`${fi}-${pi}-${uid}-signo`]||'';if(!ps)return null;return ps===rs?1:0;}
+  const pron=t.pronosticos?.[`${fi}-${pi}-${uid}`]||{};const res=t.resultados?.[`${fi}-${pi}`]||{};
+  if(pron.gl===undefined||pron.gl==='')return null;if(res.gl===undefined||res.gl==='')return null;
+  const ps=t.pronosticos?.[`${fi}-${pi}-${uid}-signo`]||'';
+  if(parseInt(pron.gl)===parseInt(res.gl)&&parseInt(pron.gv)===parseInt(res.gv))return 3;
+  return ps===rs?1:0;
+}
+
+function totalF(fi,uid,t,m){if(ausente(fi,uid))return null;const f=(t.fechas||[])[fi];if(!f)return null;let tot=0,hay=false;(f.partidos||[]).forEach((_,pi)=>{const pts=calcPuntos(fi,pi,uid,t,m);if(pts!==null){hay=true;tot+=pts;}});return hay?tot:null;}
+
+function totalG(uid,t,m){return(t.fechas||[]).reduce((s,_,fi)=>s+(totalF(fi,uid,t,m)||0),0);}
+
+function premiosResumenHTML(){
+  const t=T();if(!t)return'';const m=meta();const c=t.premiosCfg||{};
+  const pct1=c.pct1??60;const pct2=c.pct2??25;const pct3=c.pct3??10;
+  const pctRetiro=c.pctRetiro??0;
+  let pozoAcum=c.pozoInicial??0;
+  const fechas=t.fechas||[];
+  if(!fechas.length)return'<p class="sub">Sin fechas.</p>';
+
+  const rows=fechas.map((f,fi)=>{
+    const activos=partsT().filter(uid=>!ausente(fi,uid));
+    // Total jugadas en esta fecha
+    const totalJugadas=activos.reduce((s,uid)=>s+cantJugadas(fi,uid),0);
+    const cuota=cuotaFecha(fi);
+    const recaudado=totalJugadas*cuota;
+    const retiroMonto=Math.round(recaudado*pctRetiro/100);
+    const aPozo=recaudado-retiroMonto;
+    const pozoTotal=pozoAcum+aPozo;
+
+    // Verificar si hay resultados completos
+    const tieneRes=(f.partidos||[]).length>0&&(f.partidos||[]).every((_,pi)=>!!t.resultados?.[`${fi}-${pi}-signo`]);
+
+    // Calcular aciertos por jugada
+    let gan1=[],gan2=[],gan3=[];
+    if(tieneRes){
+      activos.forEach(uid=>{
+        Array.from({length:cantJugadas(fi,uid)},(_,j)=>{
+          let aciertos=0,total=(f.partidos||[]).length;
+          (f.partidos||[]).forEach((_,pi)=>{
+            const rs=t.resultados?.[`${fi}-${pi}-signo`]||'';
+            const ps=t.pronosticos?.[`${fi}-${pi}-${uid}-${j}-signo`]||'';
+            if(rs&&ps===rs)aciertos++;
+          });
+          const errores=total-aciertos;
+          const jugKey=`${uid}#${j}`;
+          if(errores===0)gan1.push(jugKey);
+          else if(errores===1)gan2.push(jugKey);
+          else if(errores===2)gan3.push(jugKey);
+        });
+      });
+    }
+
+    const monto1=gan1.length?Math.round(pozoTotal*pct1/100):0;
+    const monto2=gan2.length?Math.round(pozoTotal*pct2/100):0;
+    const monto3=gan3.length?Math.round(pozoTotal*pct3/100):0;
+    const totalPremios=monto1+monto2+monto3;
+
+    // Calcular nuevo pozo acumulado
+    const pozoSiguiente=pozoAcum+(tieneRes&&(gan1.length||gan2.length||gan3.length)?aPozo-totalPremios:aPozo);
+    const rowHTML=`<tr>
+      <td style="font-weight:500;white-space:nowrap">${f.nombre}</td>
+      <td>$${cuota.toLocaleString()}</td>
+      <td>${totalJugadas}</td>
+      <td>$${recaudado.toLocaleString()}</td>
+      <td>${pctRetiro}% = $${retiroMonto.toLocaleString()}</td>
+      <td>$${pozoAcum.toLocaleString()}</td>
+      <td><strong>$${pozoTotal.toLocaleString()}</strong></td>
+      <td>${tieneRes
+        ?`${gan1.length?gan1.length+' gan. $'+Math.round(monto1/(gan1.length||1)).toLocaleString()+'/c':`<span style="color:var(--c-text3)">vacante</span>`}`
+        :'—'}</td>
+      <td>${tieneRes
+        ?`${gan2.length?gan2.length+' gan. $'+Math.round(monto2/(gan2.length||1)).toLocaleString()+'/c':`<span style="color:var(--c-text3)">vacante</span>`}`
+        :'—'}</td>
+      <td>${tieneRes
+        ?`${gan3.length?gan3.length+' gan. $'+Math.round(monto3/(gan3.length||1)).toLocaleString()+'/c':`<span style="color:var(--c-text3)">vacante</span>`}`
+        :'—'}</td>
+    </tr>`;
+    pozoAcum=pozoSiguiente;
+    return rowHTML;
+  }).join('');
+
+  return`<div style="overflow-x:auto"><table style="font-size:12px">
+    <thead><tr>
+      <th>Fecha</th><th>Cuota</th><th>Jugadas</th><th>Recaudado</th>
+      <th>Retiro org.</th><th>Pozo acum.</th><th>Pozo total</th>
+      <th>1° Premio</th><th>2° Premio</th><th>3° Premio</th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+  </table></div>`;
+}
+
+function calcPozos(t,m,c){
+  const cond=c.condicion||'max_puntos';const mb=c.montoFecha||0;let pozos=[],acum=0;
+  (t.fechas||[]).forEach((f,fi)=>{
+    const pd=mb+acum;const tieneRes=(f.partidos||[]).length>0&&(f.partidos||[]).every((_,pi)=>!!t.resultados?.[`${fi}-${pi}-signo`]);
+    if(!tieneRes){pozos.push({nombre:f.nombre,pozoDeFecha:pd,ganadores:[],estado:'pendiente'});return;}
+    const act=partsT().filter(uid=>!ausente(fi,uid));
+    const scores=act.map(uid=>{let pts=0,err=0;(f.partidos||[]).forEach((_,pi)=>{const p=calcPuntos(fi,pi,uid,t,m);if(p!==null){pts+=p;if(p===0)err++;}});return{uid,pts,err};});
+    if(!scores.length){pozos.push({nombre:f.nombre,pozoDeFecha:pd,ganadores:[],estado:'acumulado'});acum+=mb;return;}
+    let gan=[];
+    if(cond==='max_puntos'){const max=Math.max(...scores.map(s=>s.pts));gan=scores.filter(s=>s.pts===max).map(s=>s.uid);}
+    else if(cond==='todos_aciertos'){gan=scores.filter(s=>s.err===0).map(s=>s.uid);}
+    else{const min=Math.min(...scores.map(s=>s.err));gan=scores.filter(s=>s.err===min).map(s=>s.uid);}
+    if(!gan.length){pozos.push({nombre:f.nombre,pozoDeFecha:pd,ganadores:[],estado:'acumulado'});acum+=mb;}
+    else{pozos.push({nombre:f.nombre,pozoDeFecha:pd,ganadores:gan,estado:'ganado',premioPorGanador:pd/gan.length});acum=0;}
+  });
+  return pozos;
+}
+// ─────────────────────────────────────────────────────────────
+
+
 const ESTADO_COLOR={planificada:'#888',activa:'#16a34a',terminada:'#2563eb',standby:'#d97706'};
 const ESTADO_LABEL={planificada:'📅 Planificada',activa:'🟢 Activa',terminada:'✅ Terminada',standby:'⏸ Stand by'};
 
@@ -142,7 +317,7 @@ function suscribirTorneos(){
 function renderLogin(){
   setApp(`<div class="lw"><div class="lc">
     <div class="ll">⚽</div><h1 class="lt">Prode Fútbol</h1><p class="ls">Ingresá para participar</p>
-    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v3.3</p>
+    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v3.5</p>
     <button class="btn-google" onclick="loginGoogle()"><svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 6.29C4.672 4.163 6.656 3.58 9 3.58z"/></svg>Entrar con Google</button>
     <div class="ld">o con tu mail</div>
     <input id="login-mail" class="li" type="email" placeholder="tu@mail.com"/>
@@ -803,15 +978,7 @@ async function logCambio(accion, detalle, torneoId){
 }
 
 // ── JUGADAS MÚLTIPLES ────────────────────────────────────────
-function cantJugadas(fi,uid){
-  return T()?.jugadas?.[`${fi}-${uid}`]||1;
-}
-async function setJugadas(fi,uid,n){
-  const t=T();if(!t)return;
-  const jugadas=JSON.parse(JSON.stringify(t.jugadas||{}));
-  jugadas[`${fi}-${uid}`]=Math.max(1,parseInt(n)||1);
-  await fupd(`torneos/${S.torneoActivo}`,{jugadas});
-}
+async 
 
 function rtPronos(el){
   const t=T();if(!t)return;const m=meta();const fechas=t.fechas||[];
@@ -1153,15 +1320,6 @@ function rtPagos(el){
     }).join('')}</tbody>
   </table></div>`;
 }
-window.saveCuota=async function(val){await fupd(`torneos/${S.torneoActivo}`,{cuota:parseFloat(val)||500});};
-window.saveCuotaFecha=async function(fi,val){
-  const t=T();if(!t)return;
-  const cf=JSON.parse(JSON.stringify(t.cuotasFecha||{}));
-  cf[fi]=parseFloat(val)||0;
-  await fupd(`torneos/${S.torneoActivo}`,{cuotasFecha:cf});
-};
-window.savePago=async function(uid,fi,val){const t=T();if(!t)return;const pagos=JSON.parse(JSON.stringify(t.pagos||{}));pagos[`${uid}-${fi}`]=parseFloat(val)||0;await fupd(`torneos/${S.torneoActivo}`,{pagos});};
-
 // ── TAB PREMIOS ──────────────────────────────────────────────
 function rtPremios(el){
   const t=T();if(!t)return;const c=t.premiosCfg||{};
@@ -1270,35 +1428,6 @@ function rtPos(el){
 }
 
 // ── PUNTOS ───────────────────────────────────────────────────
-function calcPuntos(fi,pi,uid,t,m){
-  if(ausente(fi,uid))return null;
-  const rs=t.resultados?.[`${fi}-${pi}-signo`]||'';if(!rs)return null;
-  if(m.sistema==='1x2'){const ps=t.pronosticos?.[`${fi}-${pi}-${uid}-signo`]||'';if(!ps)return null;return ps===rs?1:0;}
-  const pron=t.pronosticos?.[`${fi}-${pi}-${uid}`]||{};const res=t.resultados?.[`${fi}-${pi}`]||{};
-  if(pron.gl===undefined||pron.gl==='')return null;if(res.gl===undefined||res.gl==='')return null;
-  const ps=t.pronosticos?.[`${fi}-${pi}-${uid}-signo`]||'';
-  if(parseInt(pron.gl)===parseInt(res.gl)&&parseInt(pron.gv)===parseInt(res.gv))return 3;
-  return ps===rs?1:0;
-}
-function totalF(fi,uid,t,m){if(ausente(fi,uid))return null;const f=(t.fechas||[])[fi];if(!f)return null;let tot=0,hay=false;(f.partidos||[]).forEach((_,pi)=>{const pts=calcPuntos(fi,pi,uid,t,m);if(pts!==null){hay=true;tot+=pts;}});return hay?tot:null;}
-function totalG(uid,t,m){return(t.fechas||[]).reduce((s,_,fi)=>s+(totalF(fi,uid,t,m)||0),0);}
-function calcPozos(t,m,c){
-  const cond=c.condicion||'max_puntos';const mb=c.montoFecha||0;let pozos=[],acum=0;
-  (t.fechas||[]).forEach((f,fi)=>{
-    const pd=mb+acum;const tieneRes=(f.partidos||[]).length>0&&(f.partidos||[]).every((_,pi)=>!!t.resultados?.[`${fi}-${pi}-signo`]);
-    if(!tieneRes){pozos.push({nombre:f.nombre,pozoDeFecha:pd,ganadores:[],estado:'pendiente'});return;}
-    const act=partsT().filter(uid=>!ausente(fi,uid));
-    const scores=act.map(uid=>{let pts=0,err=0;(f.partidos||[]).forEach((_,pi)=>{const p=calcPuntos(fi,pi,uid,t,m);if(p!==null){pts+=p;if(p===0)err++;}});return{uid,pts,err};});
-    if(!scores.length){pozos.push({nombre:f.nombre,pozoDeFecha:pd,ganadores:[],estado:'acumulado'});acum+=mb;return;}
-    let gan=[];
-    if(cond==='max_puntos'){const max=Math.max(...scores.map(s=>s.pts));gan=scores.filter(s=>s.pts===max).map(s=>s.uid);}
-    else if(cond==='todos_aciertos'){gan=scores.filter(s=>s.err===0).map(s=>s.uid);}
-    else{const min=Math.min(...scores.map(s=>s.err));gan=scores.filter(s=>s.err===min).map(s=>s.uid);}
-    if(!gan.length){pozos.push({nombre:f.nombre,pozoDeFecha:pd,ganadores:[],estado:'acumulado'});acum+=mb;}
-    else{pozos.push({nombre:f.nombre,pozoDeFecha:pd,ganadores:gan,estado:'ganado',premioPorGanador:pd/gan.length});acum=0;}
-  });
-  return pozos;
-}
 
 // ── UTILS ────────────────────────────────────────────────────
 function v(id){const el=document.getElementById(id);return el?el.value.trim():'';}
@@ -1393,133 +1522,7 @@ code{background:var(--c-bg2);padding:2px 6px;border-radius:4px;font-size:11px;bo
 <body><div id="app"></div></body>
 </html>
 // ── CUOTA Y DISTRIBUCIÓN ─────────────────────────────────────
-function cuotaFecha(fi){
-  const t=T();if(!t)return 0;
-  return t.cuotasFecha?.[fi]??t.cuota??500;
-}
-
-function fechaActivaIdx(){
-  const t=T();if(!t)return -1;
-  return(t.fechas||[]).findIndex(f=>f.estado==='activa');
-}
-
-function distribuirPagos(uid,t){
-  const fechas=t.fechas||[];
-  const fiActiva=fechas.findIndex(f=>f.estado==='activa');
-  const hasta=fiActiva>=0?fiActiva:fechas.reduce((last,f,i)=>f.estado==='terminada'?i:last,-1);
-  const movs=t.pagosDetalle?.[uid]||[];
-  const totalPagado=movs.reduce((s,m)=>s+m.monto,0);
-  let restante=totalPagado;
-  const cobertura={};
-  let totalDebe=0;
-  for(let fi=0;fi<fechas.length;fi++){
-    if(fi>hasta){cobertura[fi]='futuro';continue;}
-    if(ausente(fi,uid)){cobertura[fi]='ausente';continue;}
-    const nJug=cantJugadas(fi,uid);
-    const cf=cuotaFecha(fi)*nJug;
-    totalDebe+=cf;
-    const cubre=Math.min(restante,cf);
-    cobertura[fi]=cubre;
-    restante=Math.max(0,restante-cf);
-  }
-  return{cobertura,totalPagado,totalDebe,saldo:totalPagado-totalDebe};
-}
 
 // Calcular puntos para una jugada específica (j=índice jugada)
-function calcPuntosJug(fi,pi,uid,j,t,m){
-  if(ausente(fi,uid))return null;
-  const rs=t.resultados?.[`${fi}-${pi}-signo`]||'';if(!rs)return null;
-  if(m.sistema==='1x2'){
-    const ps=t.pronosticos?.[`${fi}-${pi}-${uid}-${j}-signo`]||'';
-    if(!ps)return null;return ps===rs?1:0;
-  }
-  const pron=t.pronosticos?.[`${fi}-${pi}-${uid}-${j}`]||{};
-  const res=t.resultados?.[`${fi}-${pi}`]||{};
-  if(pron.gl===undefined||pron.gl==='')return null;
-  if(res.gl===undefined||res.gl==='')return null;
-  const ps=t.pronosticos?.[`${fi}-${pi}-${uid}-${j}-signo`]||'';
-  if(parseInt(pron.gl)===parseInt(res.gl)&&parseInt(pron.gv)===parseInt(res.gv))return 3;
-  return ps===rs?1:0;
-}
-
-function premiosResumenHTML(){
-  const t=T();if(!t)return'';const m=meta();const c=t.premiosCfg||{};
-  const pct1=c.pct1??60;const pct2=c.pct2??25;const pct3=c.pct3??10;
-  const pctRetiro=c.pctRetiro??0;
-  let pozoAcum=c.pozoInicial??0;
-  const fechas=t.fechas||[];
-  if(!fechas.length)return'<p class="sub">Sin fechas.</p>';
-
-  const rows=fechas.map((f,fi)=>{
-    const activos=partsT().filter(uid=>!ausente(fi,uid));
-    // Total jugadas en esta fecha
-    const totalJugadas=activos.reduce((s,uid)=>s+cantJugadas(fi,uid),0);
-    const cuota=cuotaFecha(fi);
-    const recaudado=totalJugadas*cuota;
-    const retiroMonto=Math.round(recaudado*pctRetiro/100);
-    const aPozo=recaudado-retiroMonto;
-    const pozoTotal=pozoAcum+aPozo;
-
-    // Verificar si hay resultados completos
-    const tieneRes=(f.partidos||[]).length>0&&(f.partidos||[]).every((_,pi)=>!!t.resultados?.[`${fi}-${pi}-signo`]);
-
-    // Calcular aciertos por jugada
-    let gan1=[],gan2=[],gan3=[];
-    if(tieneRes){
-      activos.forEach(uid=>{
-        Array.from({length:cantJugadas(fi,uid)},(_,j)=>{
-          let aciertos=0,total=(f.partidos||[]).length;
-          (f.partidos||[]).forEach((_,pi)=>{
-            const rs=t.resultados?.[`${fi}-${pi}-signo`]||'';
-            const ps=t.pronosticos?.[`${fi}-${pi}-${uid}-${j}-signo`]||'';
-            if(rs&&ps===rs)aciertos++;
-          });
-          const errores=total-aciertos;
-          const jugKey=`${uid}#${j}`;
-          if(errores===0)gan1.push(jugKey);
-          else if(errores===1)gan2.push(jugKey);
-          else if(errores===2)gan3.push(jugKey);
-        });
-      });
-    }
-
-    const monto1=gan1.length?Math.round(pozoTotal*pct1/100):0;
-    const monto2=gan2.length?Math.round(pozoTotal*pct2/100):0;
-    const monto3=gan3.length?Math.round(pozoTotal*pct3/100):0;
-    const totalPremios=monto1+monto2+monto3;
-
-    // Calcular nuevo pozo acumulado
-    const pozoSiguiente=pozoAcum+(tieneRes&&(gan1.length||gan2.length||gan3.length)?aPozo-totalPremios:aPozo);
-    const rowHTML=`<tr>
-      <td style="font-weight:500;white-space:nowrap">${f.nombre}</td>
-      <td>$${cuota.toLocaleString()}</td>
-      <td>${totalJugadas}</td>
-      <td>$${recaudado.toLocaleString()}</td>
-      <td>${pctRetiro}% = $${retiroMonto.toLocaleString()}</td>
-      <td>$${pozoAcum.toLocaleString()}</td>
-      <td><strong>$${pozoTotal.toLocaleString()}</strong></td>
-      <td>${tieneRes
-        ?`${gan1.length?gan1.length+' gan. $'+Math.round(monto1/(gan1.length||1)).toLocaleString()+'/c':`<span style="color:var(--c-text3)">vacante</span>`}`
-        :'—'}</td>
-      <td>${tieneRes
-        ?`${gan2.length?gan2.length+' gan. $'+Math.round(monto2/(gan2.length||1)).toLocaleString()+'/c':`<span style="color:var(--c-text3)">vacante</span>`}`
-        :'—'}</td>
-      <td>${tieneRes
-        ?`${gan3.length?gan3.length+' gan. $'+Math.round(monto3/(gan3.length||1)).toLocaleString()+'/c':`<span style="color:var(--c-text3)">vacante</span>`}`
-        :'—'}</td>
-    </tr>`;
-    pozoAcum=pozoSiguiente;
-    return rowHTML;
-  }).join('');
-
-  return`<div style="overflow-x:auto"><table style="font-size:12px">
-    <thead><tr>
-      <th>Fecha</th><th>Cuota</th><th>Jugadas</th><th>Recaudado</th>
-      <th>Retiro org.</th><th>Pozo acum.</th><th>Pozo total</th>
-      <th>1° Premio</th><th>2° Premio</th><th>3° Premio</th>
-    </tr></thead>
-    <tbody>${rows}</tbody>
-  </table></div>`;
-}
 
 
