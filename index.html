@@ -57,181 +57,6 @@ function ausente(fi,uid){
 function meta(){return torneos().find(x=>x.id===S.torneoActivo)||{};}
 function nombrePart(uid){const p=allParts()[uid];return p?`${p.nombre} ${p.apellido}`:uid;}
 
-// ── HELPERS (definidas antes de ser usadas) ─────────────────
-function cuotaFecha(fi){
-  const t=T();if(!t)return 0;
-  return t.cuotasFecha?.[fi]??t.cuota??500;
-}
-
-function fechaActivaIdx(){
-  const t=T();if(!t)return -1;
-  return(t.fechas||[]).findIndex(f=>f.estado==='activa');
-}
-
-function cantJugadas(fi,uid){
-  return T()?.jugadas?.[`${fi}-${uid}`]||1;
-}
-
-async function setJugadas(fi,uid,n){
-  const t=T();if(!t)return;
-  const jugadas=JSON.parse(JSON.stringify(t.jugadas||{}));
-  jugadas[`${fi}-${uid}`]=Math.max(1,parseInt(n)||1);
-  await fupd(`torneos/${S.torneoActivo}`,{jugadas});
-}
-
-function distribuirPagos(uid,t){
-  const fechas=t.fechas||[];
-  const fiActiva=fechas.findIndex(f=>f.estado==='activa');
-  const hasta=fiActiva>=0?fiActiva:fechas.reduce((last,f,i)=>f.estado==='terminada'?i:last,-1);
-  const movs=t.pagosDetalle?.[uid]||[];
-  const totalPagado=movs.reduce((s,m)=>s+m.monto,0);
-  let restante=totalPagado;
-  const cobertura={};
-  let totalDebe=0;
-  for(let fi=0;fi<fechas.length;fi++){
-    if(fi>hasta){cobertura[fi]='futuro';continue;}
-    if(ausente(fi,uid)){cobertura[fi]='ausente';continue;}
-    const nJug=cantJugadas(fi,uid);
-    const cf=cuotaFecha(fi)*nJug;
-    totalDebe+=cf;
-    const cubre=Math.min(restante,cf);
-    cobertura[fi]=cubre;
-    restante=Math.max(0,restante-cf);
-  }
-  return{cobertura,totalPagado,totalDebe,saldo:totalPagado-totalDebe};
-}
-
-function calcPuntosJug(fi,pi,uid,j,t,m){
-  if(ausente(fi,uid))return null;
-  const rs=t.resultados?.[`${fi}-${pi}-signo`]||'';if(!rs)return null;
-  if(m.sistema==='1x2'){
-    const ps=t.pronosticos?.[`${fi}-${pi}-${uid}-${j}-signo`]||'';
-    if(!ps)return null;return ps===rs?1:0;
-  }
-  const pron=t.pronosticos?.[`${fi}-${pi}-${uid}-${j}`]||{};
-  const res=t.resultados?.[`${fi}-${pi}`]||{};
-  if(pron.gl===undefined||pron.gl==='')return null;
-  if(res.gl===undefined||res.gl==='')return null;
-  const ps=t.pronosticos?.[`${fi}-${pi}-${uid}-${j}-signo`]||'';
-  if(parseInt(pron.gl)===parseInt(res.gl)&&parseInt(pron.gv)===parseInt(res.gv))return 3;
-  return ps===rs?1:0;
-}
-
-function calcPuntos(fi,pi,uid,t,m){
-  if(ausente(fi,uid))return null;
-  const rs=t.resultados?.[`${fi}-${pi}-signo`]||'';if(!rs)return null;
-  if(m.sistema==='1x2'){const ps=t.pronosticos?.[`${fi}-${pi}-${uid}-signo`]||'';if(!ps)return null;return ps===rs?1:0;}
-  const pron=t.pronosticos?.[`${fi}-${pi}-${uid}`]||{};const res=t.resultados?.[`${fi}-${pi}`]||{};
-  if(pron.gl===undefined||pron.gl==='')return null;if(res.gl===undefined||res.gl==='')return null;
-  const ps=t.pronosticos?.[`${fi}-${pi}-${uid}-signo`]||'';
-  if(parseInt(pron.gl)===parseInt(res.gl)&&parseInt(pron.gv)===parseInt(res.gv))return 3;
-  return ps===rs?1:0;
-}
-
-function totalF(fi,uid,t,m){if(ausente(fi,uid))return null;const f=(t.fechas||[])[fi];if(!f)return null;let tot=0,hay=false;(f.partidos||[]).forEach((_,pi)=>{const pts=calcPuntos(fi,pi,uid,t,m);if(pts!==null){hay=true;tot+=pts;}});return hay?tot:null;}
-
-function totalG(uid,t,m){return(t.fechas||[]).reduce((s,_,fi)=>s+(totalF(fi,uid,t,m)||0),0);}
-
-function premiosResumenHTML(){
-  const t=T();if(!t)return'';const m=meta();const c=t.premiosCfg||{};
-  const pct1=c.pct1??60;const pct2=c.pct2??25;const pct3=c.pct3??10;
-  const pctRetiro=c.pctRetiro??0;
-  let pozoAcum=c.pozoInicial??0;
-  const fechas=t.fechas||[];
-  if(!fechas.length)return'<p class="sub">Sin fechas.</p>';
-
-  const rows=fechas.map((f,fi)=>{
-    const activos=partsT().filter(uid=>!ausente(fi,uid));
-    // Total jugadas en esta fecha
-    const totalJugadas=activos.reduce((s,uid)=>s+cantJugadas(fi,uid),0);
-    const cuota=cuotaFecha(fi);
-    const recaudado=totalJugadas*cuota;
-    const retiroMonto=Math.round(recaudado*pctRetiro/100);
-    const aPozo=recaudado-retiroMonto;
-    const pozoTotal=pozoAcum+aPozo;
-
-    // Verificar si hay resultados completos
-    const tieneRes=(f.partidos||[]).length>0&&(f.partidos||[]).every((_,pi)=>!!t.resultados?.[`${fi}-${pi}-signo`]);
-
-    // Calcular aciertos por jugada
-    let gan1=[],gan2=[],gan3=[];
-    if(tieneRes){
-      activos.forEach(uid=>{
-        Array.from({length:cantJugadas(fi,uid)},(_,j)=>{
-          let aciertos=0,total=(f.partidos||[]).length;
-          (f.partidos||[]).forEach((_,pi)=>{
-            const rs=t.resultados?.[`${fi}-${pi}-signo`]||'';
-            const ps=t.pronosticos?.[`${fi}-${pi}-${uid}-${j}-signo`]||'';
-            if(rs&&ps===rs)aciertos++;
-          });
-          const errores=total-aciertos;
-          const jugKey=`${uid}#${j}`;
-          if(errores===0)gan1.push(jugKey);
-          else if(errores===1)gan2.push(jugKey);
-          else if(errores===2)gan3.push(jugKey);
-        });
-      });
-    }
-
-    const monto1=gan1.length?Math.round(pozoTotal*pct1/100):0;
-    const monto2=gan2.length?Math.round(pozoTotal*pct2/100):0;
-    const monto3=gan3.length?Math.round(pozoTotal*pct3/100):0;
-    const totalPremios=monto1+monto2+monto3;
-
-    // Calcular nuevo pozo acumulado
-    const pozoSiguiente=pozoAcum+(tieneRes&&(gan1.length||gan2.length||gan3.length)?aPozo-totalPremios:aPozo);
-    const rowHTML=`<tr>
-      <td style="font-weight:500;white-space:nowrap">${f.nombre}</td>
-      <td>$${cuota.toLocaleString()}</td>
-      <td>${totalJugadas}</td>
-      <td>$${recaudado.toLocaleString()}</td>
-      <td>${pctRetiro}% = $${retiroMonto.toLocaleString()}</td>
-      <td>$${pozoAcum.toLocaleString()}</td>
-      <td><strong>$${pozoTotal.toLocaleString()}</strong></td>
-      <td>${tieneRes
-        ?`${gan1.length?gan1.length+' gan. $'+Math.round(monto1/(gan1.length||1)).toLocaleString()+'/c':`<span style="color:var(--c-text3)">vacante</span>`}`
-        :'—'}</td>
-      <td>${tieneRes
-        ?`${gan2.length?gan2.length+' gan. $'+Math.round(monto2/(gan2.length||1)).toLocaleString()+'/c':`<span style="color:var(--c-text3)">vacante</span>`}`
-        :'—'}</td>
-      <td>${tieneRes
-        ?`${gan3.length?gan3.length+' gan. $'+Math.round(monto3/(gan3.length||1)).toLocaleString()+'/c':`<span style="color:var(--c-text3)">vacante</span>`}`
-        :'—'}</td>
-    </tr>`;
-    pozoAcum=pozoSiguiente;
-    return rowHTML;
-  }).join('');
-
-  return`<div style="overflow-x:auto"><table style="font-size:12px">
-    <thead><tr>
-      <th>Fecha</th><th>Cuota</th><th>Jugadas</th><th>Recaudado</th>
-      <th>Retiro org.</th><th>Pozo acum.</th><th>Pozo total</th>
-      <th>1° Premio</th><th>2° Premio</th><th>3° Premio</th>
-    </tr></thead>
-    <tbody>${rows}</tbody>
-  </table></div>`;
-}
-
-function calcPozos(t,m,c){
-  const cond=c.condicion||'max_puntos';const mb=c.montoFecha||0;let pozos=[],acum=0;
-  (t.fechas||[]).forEach((f,fi)=>{
-    const pd=mb+acum;const tieneRes=(f.partidos||[]).length>0&&(f.partidos||[]).every((_,pi)=>!!t.resultados?.[`${fi}-${pi}-signo`]);
-    if(!tieneRes){pozos.push({nombre:f.nombre,pozoDeFecha:pd,ganadores:[],estado:'pendiente'});return;}
-    const act=partsT().filter(uid=>!ausente(fi,uid));
-    const scores=act.map(uid=>{let pts=0,err=0;(f.partidos||[]).forEach((_,pi)=>{const p=calcPuntos(fi,pi,uid,t,m);if(p!==null){pts+=p;if(p===0)err++;}});return{uid,pts,err};});
-    if(!scores.length){pozos.push({nombre:f.nombre,pozoDeFecha:pd,ganadores:[],estado:'acumulado'});acum+=mb;return;}
-    let gan=[];
-    if(cond==='max_puntos'){const max=Math.max(...scores.map(s=>s.pts));gan=scores.filter(s=>s.pts===max).map(s=>s.uid);}
-    else if(cond==='todos_aciertos'){gan=scores.filter(s=>s.err===0).map(s=>s.uid);}
-    else{const min=Math.min(...scores.map(s=>s.err));gan=scores.filter(s=>s.err===min).map(s=>s.uid);}
-    if(!gan.length){pozos.push({nombre:f.nombre,pozoDeFecha:pd,ganadores:[],estado:'acumulado'});acum+=mb;}
-    else{pozos.push({nombre:f.nombre,pozoDeFecha:pd,ganadores:gan,estado:'ganado',premioPorGanador:pd/gan.length});acum=0;}
-  });
-  return pozos;
-}
-// ─────────────────────────────────────────────────────────────
-
-
 const ESTADO_COLOR={planificada:'#888',activa:'#16a34a',terminada:'#2563eb',standby:'#d97706'};
 const ESTADO_LABEL={planificada:'📅 Planificada',activa:'🟢 Activa',terminada:'✅ Terminada',standby:'⏸ Stand by'};
 
@@ -267,10 +92,8 @@ async function handleUserLogin(user){
     await fset('config/global',{participantes:newParts});S.data.config.participantes=newParts;
   }
   const myPart=S.data.config.participantes[user.uid];
-  S.perfil=myPart||null;
-  const isSA2=(cfgData.superadmins||[]).includes(user.uid);
-  S.rol=isSA2?'superadmin':((cfgData.admins||[]).includes(user.uid))?'admin':'participante';
-  if(isSA2||isAdmin){await startApp();return;}
+  S.perfil=myPart||null;S.rol=isAdmin?'admin':'participante';
+  if(isAdmin){await startApp();return;}
   if(!myPart){renderAutoRegistro(user);return;}
   if(myPart.estado==='pendiente_aprobacion'){renderEspera(myPart);return;}
   if(myPart.estado==='rechazado'){renderRechazado();return;}
@@ -317,7 +140,7 @@ function suscribirTorneos(){
 function renderLogin(){
   setApp(`<div class="lw"><div class="lc">
     <div class="ll">⚽</div><h1 class="lt">Prode Fútbol</h1><p class="ls">Ingresá para participar</p>
-    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v3.6</p>
+    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v2.1</p>
     <button class="btn-google" onclick="loginGoogle()"><svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 6.29C4.672 4.163 6.656 3.58 9 3.58z"/></svg>Entrar con Google</button>
     <div class="ld">o con tu mail</div>
     <input id="login-mail" class="li" type="email" placeholder="tu@mail.com"/>
@@ -360,18 +183,18 @@ window.enviarRegistro=async function(){
 window.cerrarSesion=async function(){await signOut(auth);};
 
 function renderShell(){
-  const isAdmin=S.rol==='admin'||S.rol==='superadmin';
+  const isAdmin=S.rol==='admin';
   const nombre=S.perfil?`${S.perfil.nombre} ${S.perfil.apellido}`:(auth.currentUser?.email||'Admin');
   setApp(`<div class="layout">
     <div class="sidebar">
       <div class="sidebar-header">
         <span style="font-size:22px">⚽</span>
-        <div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${nombre}</div><div style="font-size:11px;color:var(--c-text2)">${S.rol==='superadmin'?'Super Admin':S.rol==='admin'?'Administrador':'Participante'}</div></div>
+        <div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${nombre}</div><div style="font-size:11px;color:var(--c-text2)">${isAdmin?'Administrador':'Participante'}</div></div>
         <button class="btn btn-sm" onclick="cerrarSesion()" style="padding:4px 8px">↩</button>
       </div>
       ${isAdmin?`<div class="ss">Global</div>
       <div class="ni" id="nav-participantes" onclick="navTo('participantes')">👥 Participantes <span id="bp" style="display:none;background:#dc2626;color:#fff;border-radius:10px;font-size:10px;padding:1px 6px;margin-left:auto"></span></div>
-      <div class="ni" id="nav-admins" onclick="navTo('admins')">🔑 Admins</div>${S.rol==='superadmin'?`<div class="ni" id="nav-superadmin" onclick="navTo('superadmin')">⭐ Super Admin</div>`:''}`:`
+      <div class="ni" id="nav-admins" onclick="navTo('admins')">🔑 Admins</div>`:`
       <div class="ss">Mi cuenta</div>
       <div class="ni" id="nav-miperfil" onclick="navTo('miperfil')">👤 Mis datos</div>`}
       <div class="ss">Torneos</div>
@@ -402,18 +225,16 @@ window.navTo=function(dest){
   const c=document.getElementById('content');
   if(dest==='participantes')renderViewParts(c);
   else if(dest==='admins')renderViewAdmins(c);
-  else if(dest==='superadmin')renderViewSuperAdmin(c);
   else if(dest==='miperfil')renderViewMiPerfil(c);
-  else if(dest==='otp')renderViewOTP(c);
   else if(dest==='nuevo-torneo')renderViewNuevoTorneo(c);
 };
 
 function refreshTorneoView(){
   const content=document.getElementById('content');if(!content||!S.torneoActivo)return;
   const t=T();if(!t){content.innerHTML='<div class="empty-state">Cargando...</div>';return;}
-  const isAdmin=S.rol==='admin'||S.rol==='superadmin';
+  const isAdmin=S.rol==='admin';
   const tabs=isAdmin?['participantes-t','equipos','fechas','resultados','pronosticos','pagos','premios','posiciones']:['pronosticos','posiciones'];
-  const labels={'participantes-t':'Participantes','equipos':'Equipos','fechas':'Fechas','resultados':'Resultados','pronosticos':'Pronósticos','pagos':'Pagos','premios':'Premios','posiciones':'Posiciones','historial':'📋 Historial'};
+  const labels={'participantes-t':'Participantes','equipos':'Equipos','fechas':'Fechas','resultados':'Resultados','pronosticos':'Pronósticos','pagos':'Pagos','premios':'Premios','posiciones':'Posiciones'};
   const curTab=content.dataset.activeTab;
   const activeTab=tabs.includes(curTab)?curTab:(isAdmin?'participantes-t':'pronosticos');
   const m=meta();
@@ -426,29 +247,8 @@ function refreshTorneoView(){
     <div id="tab-content"></div>`;
   content.dataset.activeTab=activeTab;renderTab(activeTab);
 }
-window.switchTab=function(id,el){
-  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
-  el.classList.add('active');
-  document.getElementById('content').dataset.activeTab=id;
-  try{renderTab(id);}
-  catch(e){
-    console.error('Error en tab '+id+':',e);
-    const tc=document.getElementById('tab-content');
-    if(tc)tc.innerHTML='<p style="color:var(--c-danger);padding:12px">Error al cargar tab: '+e.message+'</p>';
-  }
-};
-function renderTab(id){
-  const el=document.getElementById('tab-content');if(!el)return;
-  const fn={'participantes-t':rtParts,'equipos':rtEquipos,'fechas':rtFechas,
-    'resultados':rtResultados,'pronosticos':rtPronos,'pagos':rtPagos,
-    'premios':rtPremios,'posiciones':rtPos,'historial':rtHistorial}[id];
-  if(!fn){console.warn('Tab desconocido:',id);return;}
-  try{fn(el);}
-  catch(e){
-    console.error('Error renderizando tab '+id+':',e.stack||e.message);
-    el.innerHTML='<p style="color:var(--c-danger);padding:12px">Error: '+e.message+'</p>';
-  }
-}
+window.switchTab=function(id,el){document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));el.classList.add('active');document.getElementById('content').dataset.activeTab=id;renderTab(id);};
+function renderTab(id){const el=document.getElementById('tab-content');if(!el)return;({'participantes-t':rtParts,'equipos':rtEquipos,'fechas':rtFechas,'resultados':rtResultados,'pronosticos':rtPronos,'pagos':rtPagos,'premios':rtPremios,'posiciones':rtPos}[id]||(_=>{}))(el);}
 
 // ── PARTICIPANTES GLOBALES ───────────────────────────────────
 function renderViewParts(content){
@@ -540,131 +340,6 @@ window.guardarMiPerfil=async function(){
   const perfil={...S.perfil,nombre,apellido,dni,cel,mail,uid:S.uid};
   await fset('config/global',{participantes:{[S.uid]:perfil}});S.perfil=perfil;smsg('mp-msg','✅ Guardado');
 };
-
-function renderViewSuperAdmin(cnt){
-  if(S.rol!=='superadmin'){cnt.innerHTML='<p class="sub">Acceso denegado.</p>';return;}
-  const sas=(cfg().superadmins||[]);
-  const otp=cfg().otpCode||'';
-  const otpExp=cfg().otpExp||0;
-  const otpValido=otp&&otpExp>Date.now();
-  const minR=otpValido?Math.ceil((otpExp-Date.now())/60000):0;
-  cnt.innerHTML='<p class="section-title">Super Admin</p>'
-    +'<div class="card" style="border-color:var(--c-warn-border)">'
-    +'<p style="font-size:13px;font-weight:500;margin-bottom:8px;color:var(--c-warn)">Codigo de un solo uso para Admin</p>'
-    +'<p class="sub">Genera un codigo temporal (15 min) para que un Admin realice operaciones especiales.</p>'
-    +(otpValido
-      ?'<div style="background:var(--c-warn-bg);border:1px solid var(--c-warn-border);border-radius:8px;padding:12px;margin-bottom:8px;text-align:center">'
-        +'<p style="font-size:28px;font-weight:700;letter-spacing:6px;color:var(--c-warn)">'+otp+'</p>'
-        +'<p style="font-size:12px;color:var(--c-warn)">Expira en '+minR+' min</p>'
-        +'</div><button class="btn btn-sm btn-danger" onclick="revocarOTP()">Revocar</button>'
-      :'<div class="row" style="margin-top:8px">'
-        +'<select id="otp-torneo" style="max-width:220px">'+torneos().map(function(t){return'<option value="'+t.id+'">'+t.nombre+'</option>';}).join('')+'</select>'
-        +'<button class="btn btn-primary btn-sm" onclick="generarOTP()">Generar codigo</button>'
-        +'</div>')
-    +'</div>'
-    +'<div class="card" style="max-width:460px">'
-    +'<p style="font-size:13px;font-weight:500;margin-bottom:8px">Super Administradores</p>'
-    +'<p class="sub">Tu UID: <code>'+S.uid+'</code></p>'
-    +'<div class="row"><input id="sa-uid" placeholder="UID del nuevo super admin..."/>'
-    +'<button class="btn btn-primary btn-sm" onclick="addSuperAdmin()">Agregar</button></div>'
-    +'<div class="chips">'+sas.map(function(uid){return'<span class="chip">'+uid+'<span class="x" onclick="removeSuperAdmin(&quot;'+uid+'&quot;)">x</span></span>';}).join('')+'</div>'
-    +'</div>'
-    +'<div class="card" style="max-width:500px">'
-    +'<p style="font-size:13px;font-weight:500;margin-bottom:8px">Limpiar pronostico de participante</p>'
-    +'<div class="row"><label class="lbl">Torneo:</label><select id="op-torneo">'+torneos().map(function(t){return'<option value="'+t.id+'">'+t.nombre+'</option>';}).join('')+'</select></div>'
-    +'<div class="row"><label class="lbl">Participante:</label><select id="op-part">'+Object.entries(cfg().participantes||{}).filter(function(e){return e[1].estado==='activo';}).map(function(e){return'<option value="'+e[0]+'">'+e[1].nombre+' '+e[1].apellido+'</option>';}).join('')+'</select></div>'
-    +'<div class="row"><label class="lbl">Fecha:</label><select id="op-fecha"></select></div>'
-    +'<button class="btn btn-sm btn-danger" onclick="limpiarPronostico()">Limpiar pronostico</button>'
-    +'<p class="sub" style="margin-top:6px">El participante podra volver a cargarlo.</p>'
-    +'</div>';
-  var opT=document.getElementById('op-torneo');
-  if(opT){opT.addEventListener('change',poblarFechasOp);poblarFechasOp();}
-}
-function poblarFechasOp(){
-  var tid=document.getElementById('op-torneo')&&document.getElementById('op-torneo').value;
-  var sel=document.getElementById('op-fecha');if(!sel)return;
-  var td=tid?S.data.torneos[tid]:null;
-  sel.innerHTML=(td&&td.fechas||[]).map(function(f,i){return'<option value="'+i+'">'+f.nombre+'</option>';}).join('');
-}
-window.generarOTP=async function(){
-  var tid=document.getElementById('otp-torneo')&&document.getElementById('otp-torneo').value;
-  var otp=Math.random().toString(36).substring(2,8).toUpperCase();
-  await fset('config/global',{otpCode:otp,otpExp:Date.now()+15*60*1000,otpTorneo:torneos().find(function(t){return t.id===tid;})||{}});
-  renderViewSuperAdmin(document.getElementById('content'));
-};
-window.revocarOTP=async function(){
-  await fset('config/global',{otpCode:'',otpExp:0});
-  renderViewSuperAdmin(document.getElementById('content'));
-};
-window.addSuperAdmin=async function(){
-  var uid=document.getElementById('sa-uid')&&document.getElementById('sa-uid').value.trim();if(!uid)return;
-  var sas=[...(cfg().superadmins||[])];if(!sas.includes(uid))sas.push(uid);
-  await fset('config/global',{superadmins:sas});
-  document.getElementById('sa-uid').value='';
-};
-window.removeSuperAdmin=async function(uid){
-  if(uid===S.uid&&!confirm('Quitarte como super admin?'))return;
-  await fset('config/global',{superadmins:(cfg().superadmins||[]).filter(function(u){return u!==uid;})});
-};
-window.limpiarPronostico=async function(){
-  var tid=document.getElementById('op-torneo')&&document.getElementById('op-torneo').value;
-  var uid=document.getElementById('op-part')&&document.getElementById('op-part').value;
-  var fi=parseInt((document.getElementById('op-fecha')&&document.getElementById('op-fecha').value)||'0');
-  if(!tid||!uid)return alert('Selecciona torneo y participante');
-  if(!confirm('Limpiar el pronostico de este participante para esa fecha?'))return;
-  var td=S.data.torneos[tid];if(!td)return;
-  var prons=JSON.parse(JSON.stringify(td.pronosticos||{}));
-  Object.keys(prons).forEach(function(k){if(k.startsWith(fi+'-')&&k.includes('-'+uid))delete prons[k];});
-  await fupd('torneos/'+tid,{pronosticos:prons});
-  await logCambio('pronostico_limpiado','Participante '+uid+' Fecha indice '+fi,tid);
-  alert('Pronostico eliminado. El participante podra volver a cargarlo.');
-};
-
-function renderViewOTP(cnt){
-  cnt.innerHTML='<p class="section-title">Codigo Super Admin</p>'
-    +'<p class="sub">Ingresa el codigo que te dio el Super Admin.</p>'
-    +'<div class="card" style="max-width:380px">'
-    +'<div class="row"><input id="otp-input" placeholder="Codigo de 6 caracteres..." style="letter-spacing:4px;font-size:18px;text-transform:uppercase"/></div>'
-    +'<button class="btn btn-primary btn-sm" onclick="usarOTP()">Verificar</button>'
-    +'<p id="otp-msg" style="font-size:12px;margin-top:8px;min-height:16px"></p>'
-    +'</div>';
-}
-window.usarOTP=async function(){
-  var codigo=(document.getElementById('otp-input')&&document.getElementById('otp-input').value.trim().toUpperCase())||'';
-  if(!codigo)return;
-  if(cfg().otpCode===codigo&&cfg().otpExp>Date.now()){
-    S.rol='superadmin';
-    await fset('config/global',{otpCode:'',otpExp:0});
-    await logCambio('otp_usado','Admin uso codigo super admin',S.torneoActivo||(cfg().torneos||[])[0]&&cfg().torneos[0].id);
-    alert('Codigo verificado. Tenes acceso Super Admin por esta sesion.');
-    renderShell();
-  } else {
-    var el=document.getElementById('otp-msg');
-    if(el){el.textContent='Codigo invalido o expirado.';el.style.color='var(--c-danger)';}
-  }
-};
-
-function rtHistorial(el){
-  var t=T();if(!t)return;
-  var hist=t.historial||[];
-  if(!hist.length){el.innerHTML='<p class="sub" style="margin-top:8px">Sin registros aun.</p>';return;}
-  var rows=hist.slice(0,150).map(function(e){
-    var d=new Date(e.ts);
-    var fecha=d.toLocaleDateString('es')+' '+d.toLocaleTimeString('es',{hour:'2-digit',minute:'2-digit'});
-    var rolColor=e.rol==='superadmin'?'var(--c-warn)':e.rol==='admin'?'var(--c-info)':'var(--c-text2)';
-    return'<tr>'
-      +'<td style="white-space:nowrap;font-size:11px;color:var(--c-text2)">'+fecha+'</td>'
-      +'<td style="font-weight:500;white-space:nowrap">'+e.nombre+'</td>'
-      +'<td><span style="font-size:11px;color:'+rolColor+'">'+e.rol+'</span></td>'
-      +'<td style="font-size:12px">'+e.accion+'</td>'
-      +'<td style="font-size:12px;color:var(--c-text2)">'+e.detalle+'</td>'
-      +'</tr>';
-  }).join('');
-  el.innerHTML='<p class="sub" style="margin-top:4px">Ultimos '+Math.min(hist.length,150)+' registros.</p>'
-    +'<div style="overflow-x:auto"><table>'
-    +'<thead><tr><th>Fecha/hora</th><th>Usuario</th><th>Rol</th><th>Accion</th><th>Detalle</th></tr></thead>'
-    +'<tbody>'+rows+'</tbody></table></div>';
-}
 
 function renderViewNuevoTorneo(content){
   content.innerHTML=`<p class="section-title">Nuevo torneo</p><div class="card" style="max-width:420px">
@@ -848,9 +523,7 @@ window.cambiarEstado=async function(fi,nuevoEstado){
     const otra=fechas.findIndex((f,i)=>i!==fi&&f.estado==='activa');
     if(otra>=0){alert(`Ya hay una fecha activa: "${fechas[otra].nombre}". Terminala primero.`);refreshTorneoView();return;}
   }
-  const estAnterior=(T()?.fechas||[])[fi]?.estado||'planificada';
   fechas[fi].estado=nuevoEstado;await fupd(`torneos/${S.torneoActivo}`,{fechas});
-  await logCambio('estado_fecha_cambiado',`${(T()?.fechas||[])[fi]?.nombre}: ${estAnterior} -> ${nuevoEstado}`);
 };
 
 window.moverF=async function(fi,dir){
@@ -955,31 +628,6 @@ window.setResS=async function(fi,pi,signo){const t=T();if(!t)return;const res=JS
 window.setResE=async function(fi,pi,campo,val){const t=T();if(!t)return;const res=JSON.parse(JSON.stringify(t.resultados||{}));const key=`${fi}-${pi}`;if(!res[key])res[key]={gl:'',gv:''};res[key][campo]=val;const r=res[key];if(r.gl!==''&&r.gv!==''){const l=parseInt(r.gl),vv=parseInt(r.gv);res[`${fi}-${pi}-signo`]=l>vv?'1':l===vv?'X':'2';}await fupd(`torneos/${S.torneoActivo}`,{resultados:res});await checkAutoTerminar(fi);};
 
 // ── TAB PRONÓSTICOS ──────────────────────────────────────────
-// ── AUDIT LOG ────────────────────────────────────────────────
-async function logCambio(accion, detalle, torneoId){
-  const tid=torneoId||S.torneoActivo;
-  if(!tid)return;
-  const p=S.perfil;
-  const entry={
-    uid:S.uid,
-    nombre:p?`${p.nombre} ${p.apellido}`:(S.rol==='superadmin'?'SuperAdmin':'Admin'),
-    rol:S.rol,
-    accion,
-    detalle,
-    ts:new Date().toISOString()
-  };
-  try{
-    const t=S.data.torneos[tid];
-    const hist=JSON.parse(JSON.stringify(t?.historial||[]));
-    hist.unshift(entry); // más reciente primero
-    if(hist.length>300)hist.length=300;
-    await fupd(`torneos/${tid}`,{historial:hist});
-  }catch(e){console.warn('Log error:',e);}
-}
-
-// ── JUGADAS MÚLTIPLES ────────────────────────────────────────
-async 
-
 function rtPronos(el){
   const t=T();if(!t)return;const m=meta();const fechas=t.fechas||[];
   const isAdmin=S.rol==='admin';
@@ -1022,56 +670,42 @@ function rtPronos(el){
     const nombre=p.nombre?`${p.nombre} ${p.apellido}`:uid;
     const dniStr=(p.dni||'').toLowerCase();
     const busqData=`${nombre} ${p.dni||''}`.toLowerCase().replace(/[^a-záéíóúñ0-9 ]/gi,'');
-    const nJug=cantJugadas(fiReal,uid);
     let totalPts=null;
-    // Generar una planilla por jugada
-    const todasPlanillas=Array.from({length:nJug},(_,j)=>{
-      let ptsPlanilla=null;
-      const partidosBloq=(fObj.partidos||[]).map((pt,pi)=>{
-        const pts=calcPuntosJug(fiReal,pi,uid,j,t,m);
-        if(pts!==null)ptsPlanilla=(ptsPlanilla||0)+pts;
-        if(pts!==null)totalPts=(totalPts||0)+pts;
-        const signo=t.pronosticos?.[`${fiReal}-${pi}-${uid}-${j}-signo`]||'';
-        const pron=t.pronosticos?.[`${fiReal}-${pi}-${uid}-${j}`]||{gl:'',gv:''};
-        const editable=(S.rol==='superadmin')||(S.rol==='participante'&&uid===S.uid);
-        return`<div class="partido-block">
+    const bloques=(fObj.partidos||[]).map((pt,pi)=>{
+      const pts=calcPuntos(fiReal,pi,uid,t,m);
+      if(pts!==null)totalPts=(totalPts||0)+pts;
+      const signo=t.pronosticos?.[`${fiReal}-${pi}-${uid}-signo`]||'';
+      const pron=t.pronosticos?.[`${fiReal}-${pi}-${uid}`]||{gl:'',gv:''};
+      const editable=isAdmin||uid===S.uid;
+      return`<div class="partido-block">
         <div class="partido-header"><div class="team-name" style="font-size:11px">${pt.local}</div><div class="vs-label">vs</div><div class="team-name" style="font-size:11px">${pt.visita}</div></div>
         ${m.sistema==='1x2'
           ?`<div class="signos">
-              <button class="signo-btn ${signo==='1'?'sel-1':''}" ${!editable?'disabled':''} onclick="bufS(${fiReal},${pi},'${uid}',${j},'1')">1</button>
-              <button class="signo-btn ${signo==='X'?'sel-X':''}" ${!editable?'disabled':''} onclick="bufS(${fiReal},${pi},'${uid}',${j},'X')">X</button>
-              <button class="signo-btn ${signo==='2'?'sel-2':''}" ${!editable?'disabled':''} onclick="bufS(${fiReal},${pi},'${uid}',${j},'2')">2</button>
+              <button class="signo-btn ${signo==='1'?'sel-1':''}" ${!editable?'disabled':''} onclick="bufS(${fiReal},${pi},'${uid}','1')">1</button>
+              <button class="signo-btn ${signo==='X'?'sel-X':''}" ${!editable?'disabled':''} onclick="bufS(${fiReal},${pi},'${uid}','X')">X</button>
+              <button class="signo-btn ${signo==='2'?'sel-2':''}" ${!editable?'disabled':''} onclick="bufS(${fiReal},${pi},'${uid}','2')">2</button>
             </div>`
           :`<div class="score-wrap">
-              <input class="score-inp" type="number" min="0" value="${pron.gl}" placeholder="-" ${!editable?'readonly':''} onchange="bufE(${fiReal},${pi},'${uid}',${j},'gl',this.value)"/>
+              <input class="score-inp" type="number" min="0" value="${pron.gl}" placeholder="-" ${!editable?'readonly':''} onchange="bufE(${fiReal},${pi},'${uid}','gl',this.value)"/>
               <span style="color:#aaa">-</span>
-              <input class="score-inp" type="number" min="0" value="${pron.gv}" placeholder="-" ${!editable?'readonly':''} onchange="bufE(${fiReal},${pi},'${uid}',${j},'gv',this.value)"/>
+              <input class="score-inp" type="number" min="0" value="${pron.gv}" placeholder="-" ${!editable?'readonly':''} onchange="bufE(${fiReal},${pi},'${uid}','gv',this.value)"/>
             </div>`}
         ${pts!==null?`<div style="text-align:center;margin-top:5px"><span class="badge ${pts>0?'badge-green':'badge-red'}">${pts} pt${pts!==1?'s':''}</span></div>`:''}
       </div>`;
-      }).join('');
-      return nJug>1
-        ?`<div class="card" style="background:var(--c-bg2);margin-bottom:6px">
-           <div style="font-size:11px;font-weight:500;color:var(--c-text2);margin-bottom:6px">Jugada ${j+1} ${ptsPlanilla!==null?'· '+ptsPlanilla+' pts':''}</div>
-           ${partidosBloq}
-           ${editable&&!aus?`<button class="btn btn-sm btn-primary" style="margin-top:4px" onclick="guardarPronJug(${fiReal},'${uid}',${j})">💾 Guardar jugada ${j+1}</button>`:''}
-         </div>`
-        :partidosBloq;
     }).join('');
-    const bloques=todasPlanillas;
-    const editableCard=isAdmin||uid===S.uid;
+    const editable=isAdmin||uid===S.uid;
     return`<div class="pron-card card" data-busq="${busqData}" ${aus?'style="opacity:.55"':''}>
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:6px">
         <p style="font-weight:500;font-size:13px">${nombre}${p.dni?` <span style="font-size:11px;color:var(--c-text3)">[${p.dni}]</span>`:''}</p>
         <div style="display:flex;gap:6px;align-items:center">
           ${isAdmin?`<button class="ausencia-toggle ${aus?'ausente':''}" onclick="toggleAus(${fiReal},'${uid}')">${aus?'⛔ No juega':'✓ Juega'}</button>`:''}
-          ${editableCard&&!aus?`<button class="btn btn-sm btn-primary" onclick="guardarPron(${fiReal},'${uid}')">💾 Guardar</button>`:''}
+          ${editable&&!aus?`<button class="btn btn-sm btn-primary" onclick="guardarPron(${fiReal},'${uid}')">💾 Guardar</button>`:''}
         </div>
       </div>
       ${aus
         ?'<p style="font-size:12px;color:var(--c-text2);text-align:center;padding:6px 0">No juega en esta fecha</p>'
         :bloques+(totalPts!==null?`<div style="text-align:right;font-size:11px;color:var(--c-text2);margin-top:4px">Total fecha: <strong>${totalPts} pts</strong></div>`:'')}
-      ${editableCard&&!aus?`<p id="smsg-${uid.slice(-6)}" style="font-size:11px;text-align:right;margin-top:4px;min-height:14px;color:var(--c-success)"></p>`:''}
+      ${editable&&!aus?`<p id="smsg-${uid.slice(-6)}" style="font-size:11px;text-align:right;margin-top:4px;min-height:14px;color:var(--c-success)"></p>`:''}
     </div>`;
   }).join('');
 
@@ -1087,16 +721,7 @@ function rtPronos(el){
     ${alertaPron}
     <div id="pron-cards">${partCards}</div>`;
 }
-window.cambiarFP=function(fi){
-  const el=document.getElementById('tab-content');if(!el)return;
-  el.dataset.fi=String(fi);
-  // Preservar valor del buscador
-  const busqInput=document.getElementById('pron-busq-input')||document.querySelector('#pron-cards ~ * input[type=search]');
-  if(busqInput)el.dataset.busqPron=busqInput.value||el.dataset.busqPron||'';
-  renderTab('pronosticos');
-  // Restaurar foco al buscador si estaba activo
-  setTimeout(()=>{const b=document.querySelector('input[oninput="filtrarPronDom(this.value)"]');if(b&&el.dataset.busqPron){b.value=el.dataset.busqPron;}},50);
-};
+window.cambiarFP=function(fi){const el=document.getElementById('tab-content');if(!el)return;el.dataset.fi=fi;renderTab('pronosticos');};
 window.filtrarPronos=function(val){
   // Cambia fecha → re-render completo
   const el=document.getElementById('tab-content');if(!el)return;
@@ -1110,121 +735,232 @@ window.filtrarPronDom=function(val){
     card.style.display=!busq||txt.includes(busq)?'':'none';
   });
 }
+window.cambiarFP=function(fi){const el=document.getElementById('tab-content');if(!el)return;el.dataset.fi=fi;renderTab('pronosticos');};
+window.filtrarPronos=function(val){
+  const el=document.getElementById('tab-content');if(!el)return;
+  el.dataset.busqPron=val;
+  const listaEl=document.getElementById('pron-lista');
+  if(listaEl) renderPronLista(listaEl,null,null,null,null,null,null,val);
+  else renderTab('pronosticos');
+};
 window.toggleAus=async function(fi,uid){
   const t=T();if(!t)return;
-  const p=allParts()[uid]||{};
-  const nombre=p.nombre?`${p.nombre} ${p.apellido}`:uid;
-  const estaAusente=ausente(fi,uid);
   const aus=JSON.parse(JSON.stringify(t.ausencias||{}));
   const k=`${fi}-${uid}`;
+  const estaAusente=ausente(fi,uid);
   if(estaAusente){
-    // Quiere pasar a Juega: validar saldo
     const {totalPagado,totalDebe}=distribuirPagos(uid,t);
     const saldoActual=totalPagado-totalDebe;
     const cf=cuotaFecha(fi);
     if(saldoActual<cf){
-      const ok=confirm(`⚠️ ${nombre} no tiene saldo suficiente para esta fecha.\nSaldo disponible: $${saldoActual.toLocaleString()} / Cuota: $${cf.toLocaleString()}\n\n¿Marcar igual como "Juega"?`);
+      const p=allParts()[uid]||{};
+      const nombre=p.nombre?`${p.nombre} ${p.apellido}`:uid;
+      const ok=confirm(`\u26a0\ufe0f ${nombre} no tiene saldo suficiente.\nSaldo disponible: $${saldoActual.toLocaleString()} / Cuota: $${cf.toLocaleString()}\n\n\u00bfMarcar igual como "Juega"?`);
       if(!ok)return;
-    } else {
-      if(!confirm(`¿Confirmar que ${nombre} JUEGA esta fecha?`))return;
     }
     aus[k]=false;
   } else {
-    if(!confirm(`¿Confirmar que ${nombre} NO JUEGA esta fecha?`))return;
     aus[k]=true;
   }
-  // Guardar el índice de fecha visible actual para restaurarlo
-  const tabEl=document.getElementById('tab-content');
-  const fiVActual=tabEl?.dataset.fi||'0';
   await fupd(`torneos/${S.torneoActivo}`,{ausencias:aus});
-  // Restaurar la fecha seleccionada después del re-render
-  if(tabEl)tabEl.dataset.fi=fiVActual;
 };
 
-window.bufS=function(fi,pi,uid,j,signo){
-  if(S.rol==='admin')return;
-  if(S.rol==='participante'&&uid!==S.uid)return;
-  const t=T();if(!t)return;
-  const fecha=(t.fechas||[])[fi];if(!fecha)return;
-  if(fecha.estado!=='activa'){
-    alert('No podés pronosticar: la fecha está en estado "'+fecha.estado+'".');return;
-  }
-  const hayRes=(fecha.partidos||[]).some((_,pi2)=>!!t.resultados?.[`${fi}-${pi2}-signo`]);
-  if(hayRes){alert('Ya hay resultados: el pronóstico está cerrado.');return;}
-  const k=`${fi}-${pi}-${uid}-${j}-signo`;
+window.bufS=function(fi,pi,uid,signo){
+  const k=`${fi}-${pi}-${uid}-signo`;
   const prev=pronBuffer[k];
   pronBuffer[k]=prev===signo?'':signo;
   const newVal=pronBuffer[k];
+  // Actualizar visualmente SIN re-renderizar: cambiar clases de los 3 botones
   ['1','X','2'].forEach(s=>{
-    document.querySelectorAll(`button[onclick*="bufS(${fi},${pi},'${uid}',${j},'${s}')"]`).forEach(btn=>{
+    // Buscar botón por su onclick
+    const btns=document.querySelectorAll(`button[onclick*="bufS(${fi},${pi},'${uid}','${s}')"]`);
+    btns.forEach(btn=>{
       btn.classList.remove('sel-1','sel-X','sel-2');
-      if(newVal===s)btn.classList.add('sel-'+s);
+      if(newVal===s) btn.classList.add(`sel-${s}`);
     });
   });
 };
-window.bufE=function(fi,pi,uid,j,campo,val){
-  if(S.rol==='admin')return;
-  if(S.rol==='participante'&&uid!==S.uid)return;
-  const t=T();if(!t)return;
-  const fecha=(t.fechas||[])[fi];if(!fecha)return;
-  if(fecha.estado!=='activa')return;
-  const hayRes=(fecha.partidos||[]).some((_,pi2)=>!!t.resultados?.[`${fi}-${pi2}-signo`]);
-  if(hayRes)return;
-  const key=`${fi}-${pi}-${uid}-${j}`;
-  if(!pronBuffer[key])pronBuffer[key]={gl:'',gv:''};
-  pronBuffer[key][campo]=val;
-  const p=pronBuffer[key];
-  if(p.gl!==''&&p.gv!==''){const l=parseInt(p.gl),vv=parseInt(p.gv);pronBuffer[`${fi}-${pi}-${uid}-${j}-signo`]=l>vv?'1':l===vv?'X':'2';}};
-window.cambiarJugadas=async function(fi,uid,delta){
-  const t=T();if(!t)return;
-  const actual=cantJugadas(fi,uid);
-  const nuevo=Math.max(1,actual+delta);
-  if(nuevo===actual)return;
-  // Validar saldo si se agrega jugada
-  if(delta>0){
-    const {totalPagado,totalDebe}=distribuirPagos(uid,t);
-    const saldoExtra=totalPagado-totalDebe;
-    const cf=cuotaFecha(fi);
-    const p=allParts()[uid]||{};
-    const nombre=p.nombre?`${p.nombre} ${p.apellido}`:uid;
-    if(saldoExtra<cf){
-      if(!confirm(`⚠️ ${nombre} no tiene saldo suficiente para una jugada adicional.\nSaldo disponible: $${saldoExtra.toLocaleString()} / Costo: $${cf.toLocaleString()}\n\n¿Agregar igual?`))return;
-    }
-  }
-  const jugadas=JSON.parse(JSON.stringify(t.jugadas||{}));
-  jugadas[`${fi}-${uid}`]=nuevo;
-  // Preservar índice de fecha
-  const tabEl=document.getElementById('tab-content');
-  const fiV=tabEl?.dataset.fi||'0';
-  await fupd(`torneos/${S.torneoActivo}`,{jugadas});
-  if(tabEl)tabEl.dataset.fi=fiV;
-};
-
-window.guardarPronJug=async function(fi,uid,j){
-  const t=T();if(!t)return;
-  const prons=JSON.parse(JSON.stringify(t.pronosticos||{}));
-  Object.entries(pronBuffer).forEach(([k,val])=>{
-    if(k.startsWith(`${fi}-`)&&k.includes(`-${uid}-${j}`))prons[k]=val;
-  });
-  Object.keys(pronBuffer).forEach(k=>{
-    if(k.startsWith(`${fi}-`)&&k.includes(`-${uid}-${j}`))delete pronBuffer[k];
-  });
-  await fupd(`torneos/${S.torneoActivo}`,{pronosticos:prons});
-  const el=document.getElementById(`smsg-${uid.slice(-6)}-${j}`);
-  if(el){el.textContent='✅ Jugada '+(j+1)+' guardada';setTimeout(()=>{if(el)el.textContent='';},2500);}
-};
-
+window.bufE=function(fi,pi,uid,campo,val){const key=`${fi}-${pi}-${uid}`;if(!pronBuffer[key])pronBuffer[key]={gl:'',gv:''};pronBuffer[key][campo]=val;const p=pronBuffer[key];if(p.gl!==''&&p.gv!==''){const l=parseInt(p.gl),vv=parseInt(p.gv);pronBuffer[`${fi}-${pi}-${uid}-signo`]=l>vv?'1':l===vv?'X':'2';}};
 window.guardarPron=async function(fi,uid){
   const t=T();if(!t)return;
   const prons=JSON.parse(JSON.stringify(t.pronosticos||{}));
   Object.entries(pronBuffer).forEach(([k,val])=>{if(k.startsWith(`${fi}-`)&&k.includes(`-${uid}`))prons[k]=val;});
   Object.keys(pronBuffer).forEach(k=>{if(k.startsWith(`${fi}-`)&&k.includes(`-${uid}`))delete pronBuffer[k];});
   await fupd(`torneos/${S.torneoActivo}`,{pronosticos:prons});
-  await logCambio('pronóstico_guardado',`${nombrePart(uid)} — Fecha índice ${fi}`);
   const el=document.getElementById(`smsg-${uid.slice(-6)}`);
   if(el){el.textContent='✅ Guardado';setTimeout(()=>{if(el)el.textContent='';},2500);}
 };
+window.cambiarFP=function(fi){const el=document.getElementById('tab-content');if(!el)return;el.dataset.fi=fi;renderTab('pronosticos');};
+window.toggleAus=async function(fi,uid){const t=T();if(!t)return;const aus=JSON.parse(JSON.stringify(t.ausencias||{}));const k=`${fi}-${uid}`;aus[k]=!aus[k];await fupd(`torneos/${S.torneoActivo}`,{ausencias:aus});};
 
+// ── TAB PAGOS ────────────────────────────────────────────────
+function cuotaFecha(fi){const t=T();if(!t)return 0;return t.cuotasFecha?.[fi]??t.cuota??500;}
+
+// Índice de la fecha activa
+function fechaActivaIdx(){const t=T();if(!t)return -1;return(t.fechas||[]).findIndex(f=>f.estado==='activa');}
+
+// Distribución automática de pagos fecha a fecha (solo fechas que jugó hasta la activa inclusive)
+function distribuirPagos(uid,t){
+  const fechas=t.fechas||[];
+  const fiActiva=fechas.findIndex(f=>f.estado==='activa');
+  // Tomar en cuenta solo hasta la fecha activa (inclusive) o terminadas antes
+  const hasta=fiActiva>=0?fiActiva:fechas.reduce((last,f,i)=>f.estado==='terminada'?i:last,-1);
+  const movs=t.pagosDetalle?.[uid]||[];
+  const totalPagado=movs.reduce((s,m)=>s+m.monto,0);
+  let restante=totalPagado;
+  const cobertura={};
+  let totalDebe=0;
+  for(let fi=0;fi<fechas.length;fi++){
+    if(fi>hasta){cobertura[fi]='futuro';continue;}
+    if(ausente(fi,uid)){cobertura[fi]='ausente';continue;}
+    const cf=cuotaFecha(fi);
+    totalDebe+=cf;
+    const cubre=Math.min(restante,cf);
+    cobertura[fi]=cubre;
+    restante=Math.max(0,restante-cf);
+  }
+  return{cobertura,totalPagado,totalDebe,saldo:totalPagado-totalDebe};
+}
+
+function rtPagos(el){
+  const t=T();if(!t)return;
+  const uids=partsT();const fechas=t.fechas||[];
+  if(!uids.length||!fechas.length){el.innerHTML='<p class="sub" style="margin-top:4px">Configurá fechas y participantes primero.</p>';return;}
+  const cuotaBase=t.cuota||500;
+  const vista=el.dataset.vista||'resumen';
+  const fiActiva=fechas.findIndex(f=>f.estado==='activa');
+
+  // FIX 1: no re-renderizar si hay un INPUT con foco activo en este tab
+  const focusedEl=document.activeElement;
+  if(focusedEl&&(focusedEl.tagName==='INPUT'||focusedEl.tagName==='TEXTAREA')&&el.contains(focusedEl))return;
+
+  const tabsBtns=`<div style="display:flex;gap:6px;margin-bottom:10px">
+    <button class="btn btn-sm ${vista==='resumen'?'btn-primary':''}" onclick="setPagosVista('resumen')">📊 Resumen</button>
+    <button class="btn btn-sm ${vista==='detalle'?'btn-primary':''}" onclick="setPagosVista('detalle')">📋 Movimientos</button>
+  </div>`;
+
+  const busqPagos=el.dataset.busqPagos||'';
+  const uidsFilPag=uids.filter(uid=>{
+    if(!busqPagos)return true;
+    const p=allParts()[uid]||{};
+    return(`${p.nombre||''} ${p.apellido||''} ${p.dni||''}`).toLowerCase().includes(busqPagos.toLowerCase());
+  });
+  const buscadorPagos=`<div style="margin-bottom:8px"><input type="search" placeholder="\uD83D\uDD0D Buscar por nombre o DNI..." value="${busqPagos}" style="width:100%;max-width:360px;padding:6px 10px;font-size:13px;border:1px solid var(--c-border);border-radius:8px;background:var(--c-bg);color:var(--c-text)" id="pagos-busq" oninput="filtrarPagos(this.value)"/></div>`;
+  const cfgBase=`<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
+    <label style="font-size:12px;white-space:nowrap">Cuota base:</label>
+    <input type="number" min="0" step="100" value="${cuotaBase}"
+      style="max-width:80px;padding:5px 8px;font-size:13px;border:1px solid var(--c-border);border-radius:8px;background:var(--c-bg);color:var(--c-text)"
+      onblur="saveCuota(this.value)"/>
+    <span style="font-size:12px;color:var(--c-text2)">$ — cuota editable por fecha en el encabezado</span>
+  </div>`;
+
+  if(vista==='resumen'){
+    // Encabezado: cuota editable por fecha, fecha activa destacada
+    const headerCuotas=fechas.map((f,fi)=>{
+      const esActiva=f.estado==='activa';
+      const esTerminada=f.estado==='terminada';
+      const esFutura=!esActiva&&!esTerminada&&f.estado!=='standby';
+      const bgHeader=esActiva?'background:var(--c-success-bg);border-bottom:2px solid var(--c-success)':'';
+      const idCol=esActiva?`id="col-activa-${fi}"`:'';
+      return`<th ${idCol} style="${bgHeader}">
+        <div style="font-size:10px;font-weight:500;white-space:nowrap;color:${esActiva?'var(--c-success)':esTerminada?'var(--c-info)':'var(--c-text2)'}">${f.nombre}${esActiva?' 🟢':''}</div>
+        ${!esFutura?`<div style="display:flex;gap:2px;align-items:center;margin-top:2px">
+          <span style="font-size:9px;color:var(--c-text3)">$</span>
+          <input type="number" min="0" step="100" value="${cuotaFecha(fi)}"
+            style="width:52px;padding:2px 3px;font-size:10px;border:1px solid var(--c-border);border-radius:4px;background:var(--c-bg2);color:var(--c-text)"
+            onblur="saveCuotaFecha(${fi},this.value)"/>
+        </div>`:'<div style="font-size:9px;color:var(--c-text3);margin-top:2px">pendiente</div>'}
+      </th>`;
+    }).join('');
+
+    const filas=uids.map(uid=>{
+      const p=allParts()[uid]||{};
+      const nombre=p.nombre?`${p.nombre} ${p.apellido}`:uid;
+      const dniTag=p.dni?` <span style="font-size:10px;color:var(--c-text3)">[${p.dni}]</span>`:'';
+      const busqDataPago=`${p.nombre||''} ${p.apellido||''} ${p.dni||''}`.toLowerCase();
+      const {cobertura,totalPagado,totalDebe,saldo}=distribuirPagos(uid,t);
+      const celdas=fechas.map((f,fi)=>{
+        const cob=cobertura[fi];
+        const esActiva=f.estado==='activa';
+        const bgCell=esActiva?'background:var(--c-success-bg)':'';
+        if(cob==='ausente')return`<td style="text-align:center;${bgCell}"><span style="color:var(--c-danger);font-size:14px">✕</span></td>`;
+        if(cob==='futuro')return`<td style="text-align:center;color:var(--c-text3);font-size:11px;${bgCell}">—</td>`;
+        const cf=cuotaFecha(fi);
+        const diff=cob-cf;
+        return`<td style="text-align:center;${bgCell}">
+          <div style="font-size:12px;font-weight:500">$${cob.toLocaleString()}</div>
+          ${diff>=0?'<span class="badge badge-green" style="font-size:10px">✓</span>':`<span class="badge badge-red" style="font-size:10px">-$${Math.abs(diff).toLocaleString()}</span>`}
+        </td>`;
+      }).join('');
+      return`<tr class="pago-row" data-busq="${busqDataPago}">
+        <td style="font-weight:500;white-space:nowrap;position:sticky;left:0;background:var(--c-bg);z-index:1;border-right:1px solid var(--c-border)">${nombre}${dniTag}</td>
+        ${celdas}
+        <td style="white-space:nowrap">$${totalDebe.toLocaleString()}</td>
+        <td style="white-space:nowrap">$${totalPagado.toLocaleString()}</td>
+        <td><span class="badge ${saldo>=0?'badge-green':'badge-red'}">${saldo>=0?'+':''}$${saldo.toLocaleString()}</span></td>
+      </tr>`;
+    }).join('');
+
+    el.innerHTML=tabsBtns+buscadorPagos+cfgBase+`<div style="overflow-x:auto;max-width:100%" id="tabla-pagos-wrap"><table style="min-width:max-content;width:100%">
+      <thead><tr>
+        <th style="position:sticky;left:0;background:var(--c-bg2);z-index:2;border-right:1px solid var(--c-border)">Participante</th>
+        ${headerCuotas}
+        <th>Debe</th><th>Pagado</th><th>Saldo</th>
+      </tr></thead>
+      <tbody>${filas}</tbody>
+    </table></div>`;
+
+    // Scroll automático a la fecha activa
+    if(fiActiva>=0){
+      setTimeout(()=>{
+        const colActiva=document.getElementById(`col-activa-${fiActiva}`);
+        const wrap=document.getElementById('tabla-pagos-wrap');
+        if(colActiva&&wrap){
+          // Calcular offset de la columna dentro del wrapper
+          const wrapRect=wrap.getBoundingClientRect();
+          const colRect=colActiva.getBoundingClientRect();
+          const scrollTo=colRect.left-wrapRect.left+wrap.scrollLeft-120;
+          wrap.scrollTo({left:Math.max(0,scrollTo),behavior:'smooth'});
+        }
+      },100);
+    }
+
+  } else {
+    // Vista movimientos: lista simple por participante
+    const bloques=uids.map(uid=>{
+      const p=allParts()[uid]||{};
+      const nombre=p.nombre?`${p.nombre} ${p.apellido}`:uid;
+      const dniTag=p.dni?` <span style="font-size:11px;color:var(--c-text3)">[DNI ${p.dni}]</span>`:'';
+      const busqDataPago=`${p.nombre||''} ${p.apellido||''} ${p.dni||''}`.toLowerCase();
+      const movs=t.pagosDetalle?.[uid]||[];
+      const total=movs.reduce((s,m)=>s+m.monto,0);
+      const {totalDebe,saldo}=distribuirPagos(uid,t);
+      return`<div class="card pago-row" data-busq="${busqDataPago}">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:6px">
+          <span style="font-weight:500;font-size:13px">${nombre}</span>${dniTag}
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <span style="font-size:12px">Total pagado: <strong>$${total.toLocaleString()}</strong></span>
+            <span style="font-size:12px">Debe: <strong>$${totalDebe.toLocaleString()}</strong></span>
+            <span class="badge ${saldo>=0?'badge-green':'badge-red'}">${saldo>=0?'A favor $'+saldo.toLocaleString():'Debe $'+Math.abs(saldo).toLocaleString()}</span>
+            <button class="btn btn-sm btn-primary" onclick="abrirNuevoPago('${uid}')">+ Pago</button>
+          </div>
+        </div>
+        ${movs.length
+          ?`<table style="width:100%"><thead><tr><th>Fecha pago</th><th>Monto</th><th>Nota</th><th></th></tr></thead>
+          <tbody>${movs.map((m,mi)=>`<tr>
+            <td>${m.fecha||'—'}</td>
+            <td style="font-weight:500">$${m.monto.toLocaleString()}</td>
+            <td style="color:var(--c-text2);font-size:12px">${m.nota||''}</td>
+            <td><button onclick="eliminarMov('${uid}',${mi})" style="background:none;border:none;cursor:pointer;color:var(--c-danger);font-size:13px">✕</button></td>
+          </tr>`).join('')}</tbody></table>`
+          :`<p style="font-size:12px;color:var(--c-text2)">Sin pagos registrados.</p>`}
+      </div>`;
+    }).join('');
+
+    el.innerHTML=tabsBtns+buscadorPagos+bloques+`<div id="modal-pago" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:999;align-items:center;justify-content:center"></div>`;
+  }
+  el.dataset.vista=vista;
+}
 
 window.filtrarPagos=function(val){
   const busq=val.trim().toLowerCase();
@@ -1232,7 +968,7 @@ window.filtrarPagos=function(val){
     const txt=(el.dataset.busq||'');
     el.style.display=!busq||txt.includes(busq)?'':'none';
   });
-};
+}
 window.setPagosVista=function(vista){
   const el=document.getElementById('tab-content');if(!el)return;
   el.dataset.vista=vista;renderTab('pagos');
@@ -1298,207 +1034,27 @@ window.saveCuotaFecha=async function(fi,val){
 };
 window.savePago=async function(uid,fi,val){const t=T();if(!t)return;const pagos=JSON.parse(JSON.stringify(t.pagos||{}));pagos[`${uid}-${fi}`]=parseFloat(val)||0;await fupd(`torneos/${S.torneoActivo}`,{pagos});};
 
-
-function rtPagos(el){
-  const t=T();if(!t)return;
-  const uids=partsT();const fechas=t.fechas||[];
-  if(!uids.length||!fechas.length){
-    el.innerHTML='<p class="sub" style="margin-top:4px">Configurá fechas y participantes primero.</p>';return;
-  }
-  const cuotaBase=t.cuota||500;
-  const vista=el.dataset.vista||'resumen';
-  const fiActiva=fechas.findIndex(f=>f.estado==='activa');
-
-  // FIX: no re-renderizar si hay INPUT con foco
-  const focusedEl=document.activeElement;
-  if(focusedEl&&(focusedEl.tagName==='INPUT'||focusedEl.tagName==='TEXTAREA')&&el.contains(focusedEl))return;
-
-  const tabsBtns=`<div style="display:flex;gap:6px;margin-bottom:10px">
-    <button class="btn btn-sm ${vista==='resumen'?'btn-primary':''}" onclick="setPagosVista('resumen')">Resumen</button>
-    <button class="btn btn-sm ${vista==='detalle'?'btn-primary':''}" onclick="setPagosVista('detalle')">Movimientos</button>
-  </div>`;
-
-  const buscadorPagos=`<div style="margin-bottom:8px">
-    <input type="search" placeholder="Buscar por nombre o DNI..." value="${el.dataset.busqPagos||''}"
-      style="width:100%;max-width:360px;padding:6px 10px;font-size:13px;border:1px solid var(--c-border);border-radius:8px;background:var(--c-bg);color:var(--c-text)"
-      oninput="filtrarPagos(this.value)"/>
-  </div>`;
-
-  const cfgBase=`<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
-    <label style="font-size:12px;white-space:nowrap">Cuota base:</label>
-    <input type="number" min="0" step="100" value="${cuotaBase}"
-      style="max-width:80px;padding:5px 8px;font-size:13px;border:1px solid var(--c-border);border-radius:8px;background:var(--c-bg);color:var(--c-text)"
-      onblur="saveCuota(this.value)"/>
-    <span style="font-size:12px;color:var(--c-text2)">$ base — editable por fecha en el encabezado</span>
-  </div>`;
-
-  if(vista==='resumen'){
-    const headerCuotas=fechas.map((f,fi)=>{
-      const esActiva=f.estado==='activa';
-      const ec=esActiva?'background:var(--c-success-bg);border-bottom:2px solid var(--c-success)':'';
-      const idCol=esActiva?`id="col-activa-${fi}"`:'';
-      return`<th ${idCol} style="${ec}">
-        <div style="font-size:10px;font-weight:500;color:${esActiva?'var(--c-success)':'var(--c-text2)'}">${f.nombre}${esActiva?' 🟢':''}</div>
-        <div style="display:flex;gap:2px;align-items:center;margin-top:2px">
-          <span style="font-size:9px;color:var(--c-text3)">$</span>
-          <input type="number" min="0" step="100" value="${cuotaFecha(fi)}"
-            style="width:52px;padding:2px 3px;font-size:10px;border:1px solid var(--c-border);border-radius:4px;background:var(--c-bg2);color:var(--c-text)"
-            onblur="saveCuotaFecha(${fi},this.value)"/>
-        </div>
-      </th>`;
-    }).join('');
-
-    const filas=uids.map(uid=>{
-      const p=allParts()[uid]||{};
-      const nombre=p.nombre?`${p.nombre} ${p.apellido}`:uid;
-      const dniTag=p.dni?` <span style="font-size:10px;color:var(--c-text3)">[${p.dni}]</span>`:'';
-      const busqData=`${p.nombre||''} ${p.apellido||''} ${p.dni||''}`.toLowerCase();
-      const {cobertura,totalPagado,totalDebe,saldo}=distribuirPagos(uid,t);
-      const celdas=fechas.map((f,fi)=>{
-        const cob=cobertura[fi];
-        const esActiva=f.estado==='activa';
-        const bg=esActiva?'background:var(--c-success-bg)':'';
-        if(cob==='ausente')return`<td style="text-align:center;${bg}"><span style="color:var(--c-danger)">✕</span></td>`;
-        if(cob==='futuro')return`<td style="text-align:center;color:var(--c-text3);${bg}">—</td>`;
-        const cf=cuotaFecha(fi)*cantJugadas(fi,uid);
-        const diff=cob-cf;
-        return`<td style="text-align:center;${bg}">
-          <div style="font-size:12px;font-weight:500">$${cob.toLocaleString()}</div>
-          ${diff>=0?'<span class="badge badge-green" style="font-size:10px">OK</span>'
-            :`<span class="badge badge-red" style="font-size:10px">-$${Math.abs(diff).toLocaleString()}</span>`}
-        </td>`;
-      }).join('');
-      return`<tr class="pago-row" data-busq="${busqData}">
-        <td style="font-weight:500;white-space:nowrap;position:sticky;left:0;background:var(--c-bg);z-index:1;border-right:1px solid var(--c-border)">${nombre}${dniTag}</td>
-        ${celdas}
-        <td>$${totalDebe.toLocaleString()}</td>
-        <td>$${totalPagado.toLocaleString()}</td>
-        <td><span class="badge ${saldo>=0?'badge-green':'badge-red'}">${saldo>=0?'+':''}$${saldo.toLocaleString()}</span></td>
-      </tr>`;
-    }).join('');
-
-    el.innerHTML=tabsBtns+buscadorPagos+cfgBase+`<div style="overflow-x:auto;max-width:100%" id="tabla-pagos-wrap">
-      <table style="min-width:max-content;width:100%">
-        <thead><tr>
-          <th style="position:sticky;left:0;background:var(--c-bg2);z-index:2;border-right:1px solid var(--c-border)">Participante</th>
-          ${headerCuotas}
-          <th>Debe</th><th>Pagado</th><th>Saldo</th>
-        </tr></thead>
-        <tbody>${filas}</tbody>
-      </table>
-    </div>`;
-
-    if(fiActiva>=0){
-      setTimeout(()=>{
-        const col=document.getElementById('col-activa-'+fiActiva);
-        const wrap=document.getElementById('tabla-pagos-wrap');
-        if(col&&wrap){
-          const wr=wrap.getBoundingClientRect();const cr=col.getBoundingClientRect();
-          wrap.scrollTo({left:Math.max(0,cr.left-wr.left+wrap.scrollLeft-120),behavior:'smooth'});
-        }
-      },100);
-    }
-
-  } else {
-    // Vista movimientos
-    const bloques=uids.map(uid=>{
-      const p=allParts()[uid]||{};
-      const nombre=p.nombre?`${p.nombre} ${p.apellido}`:uid;
-      const dniTag=p.dni?` <span style="font-size:11px;color:var(--c-text3)">[${p.dni}]</span>`:'';
-      const busqData=`${p.nombre||''} ${p.apellido||''} ${p.dni||''}`.toLowerCase();
-      const movs=t.pagosDetalle?.[uid]||[];
-      const total=movs.reduce((s,m)=>s+m.monto,0);
-      const {totalDebe,saldo}=distribuirPagos(uid,t);
-      return`<div class="card pago-row" data-busq="${busqData}">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:6px">
-          <span style="font-weight:500;font-size:13px">${nombre}${dniTag}</span>
-          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-            <span style="font-size:12px">Pagado: <strong>$${total.toLocaleString()}</strong></span>
-            <span style="font-size:12px">Debe: <strong>$${totalDebe.toLocaleString()}</strong></span>
-            <span class="badge ${saldo>=0?'badge-green':'badge-red'}">${saldo>=0?'A favor $'+saldo.toLocaleString():'Debe $'+Math.abs(saldo).toLocaleString()}</span>
-            <button class="btn btn-sm btn-primary" onclick="abrirNuevoPago('${uid}')">+ Pago</button>
-          </div>
-        </div>
-        ${movs.length
-          ?`<table style="width:100%"><thead><tr><th>Fecha</th><th>Monto</th><th>Nota</th><th></th></tr></thead>
-            <tbody>${movs.map((m,mi)=>`<tr>
-              <td>${m.fecha||'—'}</td>
-              <td style="font-weight:500">$${m.monto.toLocaleString()}</td>
-              <td style="color:var(--c-text2);font-size:12px">${m.nota||''}</td>
-              <td><button onclick="eliminarMov('${uid}',${mi})" style="background:none;border:none;cursor:pointer;color:var(--c-danger);font-size:13px">✕</button></td>
-            </tr>`).join('')}</tbody></table>`
-          :`<p style="font-size:12px;color:var(--c-text2)">Sin pagos registrados.</p>`}
-      </div>`;
-    }).join('');
-
-    el.innerHTML=tabsBtns+buscadorPagos+bloques+`<div id="modal-pago" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:999;align-items:center;justify-content:center"></div>`;
-  }
-  el.dataset.vista=vista;
-}
 // ── TAB PREMIOS ──────────────────────────────────────────────
 function rtPremios(el){
   const t=T();if(!t)return;const c=t.premiosCfg||{};
-  const pct1=c.pct1??60;const pct2=c.pct2??25;const pct3=c.pct3??10;
-  const pctRetiro=c.pctRetiro??0;const pozoInicial=c.pozoInicial??0;
-  el.innerHTML=`
-    <div class="card" style="margin-top:4px">
-      <p style="font-size:13px;font-weight:500;margin-bottom:8px">Parámetros de premios</p>
-      <div class="row"><label class="lbl">Retiro org.:</label>
-        <input id="p-retiro" type="number" min="0" max="100" value="${pctRetiro}" style="max-width:70px"/>
-        <span style="font-size:12px;color:var(--c-text2)">% de lo recaudado para el organizador</span>
-      </div>
-      <div class="row"><label class="lbl">Pozo inicial:</label>
-        <input id="p-pozo" type="number" min="0" value="${pozoInicial}" style="max-width:100px"/>
-        <span style="font-size:12px;color:var(--c-text2)">$ (monto inicial antes de la fecha 1)</span>
-      </div>
-      <p style="font-size:12px;font-weight:500;margin:8px 0 4px">Distribución del pozo por fecha:</p>
-      <div class="row"><label class="lbl">1° Premio:</label>
-        <input id="p-pct1" type="number" min="0" max="100" value="${pct1}" style="max-width:70px"/>
-        <span style="font-size:12px;color:var(--c-text2)">% (todos los aciertos)</span>
-      </div>
-      <div class="row"><label class="lbl">2° Premio:</label>
-        <input id="p-pct2" type="number" min="0" max="100" value="${pct2}" style="max-width:70px"/>
-        <span style="font-size:12px;color:var(--c-text2)">% (todos - 1 error)</span>
-      </div>
-      <div class="row"><label class="lbl">3° Premio:</label>
-        <input id="p-pct3" type="number" min="0" max="100" value="${pct3}" style="max-width:70px"/>
-        <span style="font-size:12px;color:var(--c-text2)">% (todos - 2 errores)</span>
-      </div>
-      <p style="font-size:11px;color:var(--c-text2)">Total: <strong id="pct-total">${pct1+pct2+pct3}%</strong> del pozo por fecha</p>
-      <button class="btn btn-primary btn-sm" style="margin-top:8px" onclick="guardarPremios()">Guardar parámetros</button>
-      <p id="premios-msg" style="font-size:12px;margin-top:6px;min-height:16px"></p>
-    </div>
-    <div class="card" style="margin-top:8px">
-      <p style="font-size:13px;font-weight:500;margin-bottom:8px">Resumen de premios por fecha</p>
-      <div id="premios-resumen">${premiosResumenHTML()}</div>
-    </div>`;
-  // Actualizar total en tiempo real
-  ['p-pct1','p-pct2','p-pct3'].forEach(id=>{
-    document.getElementById(id)?.addEventListener('input',()=>{
-      const tot=(+document.getElementById('p-pct1').value||0)
-               +(+document.getElementById('p-pct2').value||0)
-               +(+document.getElementById('p-pct3').value||0);
-      const el2=document.getElementById('pct-total');
-      if(el2){el2.textContent=tot+'%';el2.style.color=tot>100?'var(--c-danger)':'inherit';}
-    });
-  });
+  el.innerHTML=`<div class="card" style="margin-top:4px">
+    <p style="font-size:13px;font-weight:500;margin-bottom:7px">Premio por fecha (pozo acumulado)</p>
+    <div class="row"><label class="lbl">Monto base:</label><input id="pfm" type="number" min="0" value="${c.montoFecha||0}"/><span style="font-size:12px;color:var(--c-text2)">$/fecha</span></div>
+    <p style="font-size:11px;color:var(--c-text2);margin-bottom:7px">Si nadie gana, el pozo pasa a la siguiente. En empate se divide.</p>
+    <div class="row"><label class="lbl">Condición:</label><select id="pcond"><option value="max_puntos" ${!c.condicion||c.condicion==='max_puntos'?'selected':''}>Mayor puntaje en la fecha</option><option value="todos_aciertos" ${c.condicion==='todos_aciertos'?'selected':''}>Acertar todos los partidos</option><option value="min_errores" ${c.condicion==='min_errores'?'selected':''}>Menor cantidad de errores</option></select></div>
+  </div>
+  <div class="card">
+    <p style="font-size:13px;font-weight:500;margin-bottom:7px">Premio general</p>
+    <div class="row"><label class="lbl">1°:</label><input id="pm1" type="number" min="0" value="${c.premio1||0}"/><span style="font-size:12px;color:var(--c-text2)">$</span></div>
+    <div class="row"><label class="lbl">2°:</label><input id="pm2" type="number" min="0" value="${c.premio2||0}"/><span style="font-size:12px;color:var(--c-text2)">$</span></div>
+    <div class="row"><label class="lbl">3°:</label><input id="pm3" type="number" min="0" value="${c.premio3||0}"/><span style="font-size:12px;color:var(--c-text2)">$</span></div>
+  </div>
+  <button class="btn btn-primary btn-sm" onclick="guardarPremios()">Guardar y calcular</button>
+  <div class="card" style="margin-top:8px"><p style="font-size:12px;font-weight:500;margin-bottom:6px">Resumen</p><div id="premios-resumen">${premiosHTML()}</div></div>`;
 }
 window.guardarPremios=async function(){
-  const pct1=parseFloat(document.getElementById('p-pct1').value)||60;
-  const pct2=parseFloat(document.getElementById('p-pct2').value)||25;
-  const pct3=parseFloat(document.getElementById('p-pct3').value)||10;
-  const pctRetiro=parseFloat(document.getElementById('p-retiro').value)||0;
-  const pozoInicial=parseFloat(document.getElementById('p-pozo').value)||0;
-  if(pct1+pct2+pct3>100){
-    const el=document.getElementById('premios-msg');
-    if(el){el.textContent='Los porcentajes suman más de 100%.';el.style.color='var(--c-danger)';}
-    return;
-  }
-  await fupd(`torneos/${S.torneoActivo}`,{premiosCfg:{pct1,pct2,pct3,pctRetiro,pozoInicial}});
-  const el=document.getElementById('premios-resumen');
-  if(el)el.innerHTML=premiosResumenHTML();
-  const msg=document.getElementById('premios-msg');
-  if(msg){msg.textContent='✅ Guardado';msg.style.color='var(--c-success)';setTimeout(()=>{if(msg)msg.textContent='';},2000);}
+  const cfg={montoFecha:parseFloat(document.getElementById('pfm').value)||0,condicion:document.getElementById('pcond').value,premio1:parseFloat(document.getElementById('pm1').value)||0,premio2:parseFloat(document.getElementById('pm2').value)||0,premio3:parseFloat(document.getElementById('pm3').value)||0};
+  await fupd(`torneos/${S.torneoActivo}`,{premiosCfg:cfg});document.getElementById('premios-resumen').innerHTML=premiosHTML();
 };
 function premiosHTML(){
   const t=T();if(!t)return'';const m=meta();const c=t.premiosCfg||{};
@@ -1543,6 +1099,35 @@ function rtPos(el){
 }
 
 // ── PUNTOS ───────────────────────────────────────────────────
+function calcPuntos(fi,pi,uid,t,m){
+  if(ausente(fi,uid))return null;
+  const rs=t.resultados?.[`${fi}-${pi}-signo`]||'';if(!rs)return null;
+  if(m.sistema==='1x2'){const ps=t.pronosticos?.[`${fi}-${pi}-${uid}-signo`]||'';if(!ps)return null;return ps===rs?1:0;}
+  const pron=t.pronosticos?.[`${fi}-${pi}-${uid}`]||{};const res=t.resultados?.[`${fi}-${pi}`]||{};
+  if(pron.gl===undefined||pron.gl==='')return null;if(res.gl===undefined||res.gl==='')return null;
+  const ps=t.pronosticos?.[`${fi}-${pi}-${uid}-signo`]||'';
+  if(parseInt(pron.gl)===parseInt(res.gl)&&parseInt(pron.gv)===parseInt(res.gv))return 3;
+  return ps===rs?1:0;
+}
+function totalF(fi,uid,t,m){if(ausente(fi,uid))return null;const f=(t.fechas||[])[fi];if(!f)return null;let tot=0,hay=false;(f.partidos||[]).forEach((_,pi)=>{const pts=calcPuntos(fi,pi,uid,t,m);if(pts!==null){hay=true;tot+=pts;}});return hay?tot:null;}
+function totalG(uid,t,m){return(t.fechas||[]).reduce((s,_,fi)=>s+(totalF(fi,uid,t,m)||0),0);}
+function calcPozos(t,m,c){
+  const cond=c.condicion||'max_puntos';const mb=c.montoFecha||0;let pozos=[],acum=0;
+  (t.fechas||[]).forEach((f,fi)=>{
+    const pd=mb+acum;const tieneRes=(f.partidos||[]).length>0&&(f.partidos||[]).every((_,pi)=>!!t.resultados?.[`${fi}-${pi}-signo`]);
+    if(!tieneRes){pozos.push({nombre:f.nombre,pozoDeFecha:pd,ganadores:[],estado:'pendiente'});return;}
+    const act=partsT().filter(uid=>!ausente(fi,uid));
+    const scores=act.map(uid=>{let pts=0,err=0;(f.partidos||[]).forEach((_,pi)=>{const p=calcPuntos(fi,pi,uid,t,m);if(p!==null){pts+=p;if(p===0)err++;}});return{uid,pts,err};});
+    if(!scores.length){pozos.push({nombre:f.nombre,pozoDeFecha:pd,ganadores:[],estado:'acumulado'});acum+=mb;return;}
+    let gan=[];
+    if(cond==='max_puntos'){const max=Math.max(...scores.map(s=>s.pts));gan=scores.filter(s=>s.pts===max).map(s=>s.uid);}
+    else if(cond==='todos_aciertos'){gan=scores.filter(s=>s.err===0).map(s=>s.uid);}
+    else{const min=Math.min(...scores.map(s=>s.err));gan=scores.filter(s=>s.err===min).map(s=>s.uid);}
+    if(!gan.length){pozos.push({nombre:f.nombre,pozoDeFecha:pd,ganadores:[],estado:'acumulado'});acum+=mb;}
+    else{pozos.push({nombre:f.nombre,pozoDeFecha:pd,ganadores:gan,estado:'ganado',premioPorGanador:pd/gan.length});acum=0;}
+  });
+  return pozos;
+}
 
 // ── UTILS ────────────────────────────────────────────────────
 function v(id){const el=document.getElementById(id);return el?el.value.trim():'';}
@@ -1636,8 +1221,3 @@ code{background:var(--c-bg2);padding:2px 6px;border-radius:4px;font-size:11px;bo
 </style>
 <body><div id="app"></div></body>
 </html>
-// ── CUOTA Y DISTRIBUCIÓN ─────────────────────────────────────
-
-// Calcular puntos para una jugada específica (j=índice jugada)
-
-
