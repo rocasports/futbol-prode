@@ -146,7 +146,7 @@ function suscribirTorneos(){
 function renderLogin(){
   setApp(`<div class="lw"><div class="lc">
     <div class="ll">⚽</div><h1 class="lt">Prode Fútbol</h1><p class="ls">Ingresá para participar</p>
-    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v2.2</p>
+    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v2.3</p>
     <button class="btn-google" onclick="loginGoogle()"><svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 6.29C4.672 4.163 6.656 3.58 9 3.58z"/></svg>Entrar con Google</button>
     <div class="ld">o con tu mail</div>
     <input id="login-mail" class="li" type="email" placeholder="tu@mail.com"/>
@@ -555,6 +555,7 @@ function rtFechas(el){
           <select onchange="cambiarEstado(${fi},this.value)" style="font-size:11px;padding:3px 6px;width:auto;flex:none;border:1px solid var(--c-border);border-radius:6px;background:var(--c-bg);color:var(--c-text)">
             <option value="planificada" ${(f.estado||'planificada')==='planificada'?'selected':''}>📅 Planificada</option>
             <option value="activa" ${f.estado==='activa'?'selected':''}>🟢 Activa</option>
+            <option value="en ejecucion" ${f.estado==='en ejecucion'?'selected':''}>⚽ En Ejecución</option>
             <option value="terminada" ${f.estado==='terminada'?'selected':''}>✅ Terminada</option>
             <option value="standby" ${f.estado==='standby'?'selected':''}>⏸ Stand by</option>
           </select>
@@ -598,6 +599,12 @@ window.addFecha=async function(){
 window.cambiarEstado=async function(fi,nuevoEstado){
   const t=T();if(!t)return;
   const fechas=JSON.parse(JSON.stringify(t.fechas||[]));
+  const f=fechas[fi];
+  // FIX 1b: bloquear si Terminada y ya tiene premios asignados
+  if(f.estado==='terminada'&&t.premiosPublicados?.[fi]){
+    alert(`La fecha "${f.nombre}" ya tiene premios publicados y no puede modificarse.`);
+    refreshTorneoView();return;
+  }
   if(nuevoEstado==='activa'){
     const otra=fechas.findIndex((f,i)=>i!==fi&&f.estado==='activa');
     if(otra>=0){alert(`Ya hay una fecha activa: "${fechas[otra].nombre}". Terminala primero.`);refreshTorneoView();return;}
@@ -678,9 +685,7 @@ window.duplicarFechas=async function(){
 };
 
 async function checkAutoTerminar(fi){
-  const t=T();if(!t)return;const f=(t.fechas||[])[fi];if(!f||f.estado==='terminada'||f.estado==='planificada')return;
-  const ok=(f.partidos||[]).length>0&&(f.partidos||[]).every((_,pi)=>!!t.resultados?.[`${fi}-${pi}-signo`]);
-  if(ok){const fechas=JSON.parse(JSON.stringify(t.fechas||[]));fechas[fi].estado='terminada';await fupd(`torneos/${S.torneoActivo}`,{fechas});}
+  // No auto-terminar: el cambio de estado es siempre manual
 }
 
 // ── TAB RESULTADOS ───────────────────────────────────────────
@@ -724,9 +729,18 @@ function rtResultados(el){
 }
 window.guardarResultadosFecha=async function(fi){
   const t=T();if(!t)return;
-  // Ya se guardó en tiempo real con setResS/setResE, esto solo confirma visualmente
+  const f=(t.fechas||[])[fi];if(!f)return;
+  // Si está En Ejecución, preguntar si pasar a Terminada
+  if(f.estado==='en ejecucion'){
+    const pasar=confirm(`Los resultados de "${f.nombre}" están completos.\n\n¿Marcar la fecha como Terminada?`);
+    if(pasar){
+      const fechas=JSON.parse(JSON.stringify(t.fechas||[]));
+      fechas[fi].estado='terminada';
+      await fupd(`torneos/${S.torneoActivo}`,{fechas});
+    }
+  }
   const el=document.getElementById('res-msg-'+fi);
-  if(el){el.textContent='✅ Guardado';setTimeout(()=>{if(el)el.textContent='';},2000);}
+  if(el){el.textContent='✅ Resultados guardados';setTimeout(()=>{if(el)el.textContent='';},2500);}
 };
 window.setResS=async function(fi,pi,signo){const t=T();if(!t)return;const res=JSON.parse(JSON.stringify(t.resultados||{}));const k=`${fi}-${pi}-signo`;res[k]=res[k]===signo?'':signo;await fupd(`torneos/${S.torneoActivo}`,{resultados:res});await checkAutoTerminar(fi);};
 window.setResE=async function(fi,pi,campo,val){const t=T();if(!t)return;const res=JSON.parse(JSON.stringify(t.resultados||{}));const key=`${fi}-${pi}`;if(!res[key])res[key]={gl:'',gv:''};res[key][campo]=val;const r=res[key];if(r.gl!==''&&r.gv!==''){const l=parseInt(r.gl),vv=parseInt(r.gv);res[`${fi}-${pi}-signo`]=l>vv?'1':l===vv?'X':'2';}await fupd(`torneos/${S.torneoActivo}`,{resultados:res});await checkAutoTerminar(fi);};
@@ -809,7 +823,8 @@ function rtPronos(el){
           ${isAdmin?`<button class="ausencia-toggle ${aus?'ausente':''}" onclick="toggleAus(${fiReal},'${uid}')">${aus?'⛔ No juega':'✓ Juega'}</button>`:''}
           ${(()=>{
             const cerrado=!!(t.pronosticosCerrados?.[`${fiReal}-${uid}`]);
-            if(cerrado)return`<span style="font-size:11px;color:var(--c-text3)">🔒 Cerrado</span>`;
+            // Mostrar cerrado solo si es el participante dueño del pronóstico
+            if(cerrado&&S.rol==='participante'&&uid===S.uid)return`<span style="font-size:11px;color:var(--c-text3)">🔒 Cerrado</span>`;
             return editable&&!aus?`<button class="btn btn-sm btn-primary" onclick="guardarPron(${fiReal},'${uid}')">💾 Guardar</button>`:'';
           })()}
         </div>
@@ -878,8 +893,10 @@ window.toggleAus=async function(fi,uid){
 };
 
 window.bufS=function(fi,pi,uid,signo){
-  // Bloquear si cerrado
-  if(T()?.pronosticosCerrados?.[`${fi}-${uid}`]){alert('Este pronóstico ya fue guardado y cerrado definitivamente.');return;}
+  // Bloquear si es participante y ya cerró su pronóstico
+  if(S.rol==='participante'&&uid===S.uid&&T()?.pronosticosCerrados?.[`${fi}-${uid}`]){
+    alert('Ya guardaste tu pronóstico definitivamente y no podés modificarlo.');return;
+  }
   const k=`${fi}-${pi}-${uid}-signo`;
   const prev=pronBuffer[k];
   pronBuffer[k]=prev===signo?'':signo;
@@ -900,14 +917,21 @@ window.guardarPron=async function(fi,uid){
   // Advertir que es definitivo
   const p=allParts()[uid]||{};
   const nombre=p.nombre?`${p.nombre} ${p.apellido}`:uid;
-  if(!confirm(`⚠️ Atención: una vez guardado, ${nombre} no podrá modificar su pronóstico para esta fecha.\n\n¿Confirmar y guardar definitivamente?`))return;
+  // Solo advertir al propio participante, no al admin
+  if(S.rol==='participante'&&uid===S.uid){
+    if(!confirm(`⚠️ Atención: una vez guardado no podrás modificar tu pronóstico para esta fecha.\n\n¿Confirmar y guardar definitivamente?`))return;
+  }
   const prons=JSON.parse(JSON.stringify(t.pronosticos||{}));
   Object.entries(pronBuffer).forEach(([k,val])=>{if(k.startsWith(`${fi}-`)&&k.includes(`-${uid}`))prons[k]=val;});
   Object.keys(pronBuffer).forEach(k=>{if(k.startsWith(`${fi}-`)&&k.includes(`-${uid}`))delete pronBuffer[k];});
-  // Marcar como cerrado
-  const cerrados=JSON.parse(JSON.stringify(t.pronosticosCerrados||{}));
-  cerrados[`${fi}-${uid}`]=true;
-  await fupd(`torneos/${S.torneoActivo}`,{pronosticos:prons,pronosticosCerrados:cerrados});
+  // Solo cerrar definitivamente si es el propio participante
+  const updates={pronosticos:prons};
+  if(S.rol==='participante'&&uid===S.uid){
+    const cerrados=JSON.parse(JSON.stringify(t.pronosticosCerrados||{}));
+    cerrados[`${fi}-${uid}`]=true;
+    updates.pronosticosCerrados=cerrados;
+  }
+  await fupd(`torneos/${S.torneoActivo}`,updates);
   const el=document.getElementById(`smsg-${uid.slice(-6)}`);
   if(el){el.textContent='✅ Guardado y cerrado definitivamente';el.style.color='var(--c-success)';setTimeout(()=>{if(el)el.textContent='';},3000);}
 };
