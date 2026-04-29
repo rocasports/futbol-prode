@@ -56,9 +56,15 @@ function ausente(fi,uid){
 }
 function meta(){return torneos().find(x=>x.id===S.torneoActivo)||{};}
 function nombrePart(uid){const p=allParts()[uid];return p?`${p.nombre} ${p.apellido}`:uid;}
+// Helpers de categoría
+const CATEGORIAS = ['A','B','C','D'];
+function equipoNombre(e){return typeof e==='string'?e:e.nombre;}
+function equipoCategoria(e){return typeof e==='string'?'':e.categoria||'';}
+function equipoLabel(e){const c=equipoCategoria(e);return equipoNombre(e)+(c?` [${c}]`:'');}
 
-const ESTADO_COLOR={planificada:'#888',activa:'#16a34a',terminada:'#2563eb',standby:'#d97706'};
-const ESTADO_LABEL={planificada:'📅 Planificada',activa:'🟢 Activa',terminada:'✅ Terminada',standby:'⏸ Stand by'};
+
+const ESTADO_COLOR={planificada:'#888',activa:'#16a34a','en ejecucion':'#f59e0b',terminada:'#2563eb',standby:'#d97706'};
+const ESTADO_LABEL={planificada:'📅 Planificada',activa:'🟢 Activa','en ejecucion':'⚽ En Ejecución',terminada:'✅ Terminada',standby:'⏸ Stand by'};
 
 window.addEventListener('DOMContentLoaded',()=>{
   if(isSignInWithEmailLink(auth,window.location.href)){
@@ -140,7 +146,7 @@ function suscribirTorneos(){
 function renderLogin(){
   setApp(`<div class="lw"><div class="lc">
     <div class="ll">⚽</div><h1 class="lt">Prode Fútbol</h1><p class="ls">Ingresá para participar</p>
-    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v2.1</p>
+    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v2.2</p>
     <button class="btn-google" onclick="loginGoogle()"><svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 6.29C4.672 4.163 6.656 3.58 9 3.58z"/></svg>Entrar con Google</button>
     <div class="ld">o con tu mail</div>
     <input id="login-mail" class="li" type="email" placeholder="tu@mail.com"/>
@@ -388,20 +394,88 @@ window.togglePT=async function(uid){const t=T();if(!t)return;const lista=[...(t.
 // ── TAB EQUIPOS ──────────────────────────────────────────────
 function rtEquipos(el){
   const t=T();if(!t)return;
-  el.innerHTML=`<p class="sub" style="margin-top:4px">Equipos de este torneo.</p>
-    <div class="row"><input id="eq-input" placeholder="Nombre del equipo..." onkeydown="if(event.key==='Enter')addEquipo()"/><button class="btn btn-primary btn-sm" onclick="addEquipo()">Agregar</button></div>
-    <div class="chips">${(t.equipos||[]).map((e,i)=>`<span class="chip">${e}<span class="x" onclick="removeEquipo(${i})">✕</span></span>`).join('')}</div>`;
+  const equipos=t.equipos||[];
+  // Agrupar por categoría para mostrar
+  const porCat={};
+  equipos.forEach((e,i)=>{
+    const cat=equipoCategoria(e)||'Sin categoría';
+    if(!porCat[cat])porCat[cat]=[];
+    porCat[cat].push({e,i});
+  });
+  const listaHTML=Object.entries(porCat).sort((a,b)=>a[0].localeCompare(b[0])).map(([cat,items])=>`
+    <div style="margin-bottom:8px">
+      <p style="font-size:11px;font-weight:600;color:var(--c-text2);margin-bottom:4px">Categoría ${cat}</p>
+      <div class="chips">${items.map(({e,i})=>`<span class="chip">${equipoNombre(e)}<span class="x" onclick="editEquipo(${i})">✏</span><span class="x" onclick="removeEquipo(${i})">✕</span></span>`).join('')}</div>
+    </div>`).join('');
+  el.innerHTML=`<p class="sub" style="margin-top:4px">Equipos de este torneo agrupados por categoría.</p>
+    <div class="card" style="max-width:460px">
+      <div class="row">
+        <input id="eq-input" placeholder="Nombre del equipo..." style="flex:2"/>
+        <select id="eq-cat" style="flex:1;max-width:80px">
+          ${CATEGORIAS.map(c=>`<option value="${c}">${c}</option>`).join('')}
+        </select>
+        <button class="btn btn-primary btn-sm" onclick="addEquipo()">Agregar</button>
+      </div>
+      <p id="eq-msg" style="font-size:12px;min-height:14px;margin-top:4px"></p>
+    </div>
+    <div id="eq-edit-wrap"></div>
+    ${listaHTML||'<p class="sub">Sin equipos aún.</p>'}`;
 }
-window.addEquipo=async function(){const val=v('eq-input');if(!val)return;const t=T();if(!t)return;const lista=[...(t.equipos||[])];if(lista.includes(val))return;lista.push(val);await fupd(`torneos/${S.torneoActivo}`,{equipos:lista});document.getElementById('eq-input').value='';};
-window.removeEquipo=async function(i){const t=T();if(!t)return;const lista=[...(t.equipos||[])];lista.splice(i,1);await fupd(`torneos/${S.torneoActivo}`,{equipos:lista});};
+window.editEquipo=function(i){
+  const t=T();if(!t)return;
+  const e=t.equipos[i];
+  const wrap=document.getElementById('eq-edit-wrap');if(!wrap)return;
+  const nombre=equipoNombre(e);const cat=equipoCategoria(e);
+  wrap.innerHTML=`<div class="card" style="max-width:460px;border-color:var(--c-info-border)">
+    <p style="font-size:12px;font-weight:500;margin-bottom:6px">Editando: <strong>${nombre}</strong></p>
+    <div class="row">
+      <input id="eq-edit-nombre" value="${nombre}" style="flex:2"/>
+      <select id="eq-edit-cat" style="flex:1;max-width:80px">
+        ${CATEGORIAS.map(c=>`<option value="${c}" ${c===cat?'selected':''}>${c}</option>`).join('')}
+      </select>
+      <button class="btn btn-primary btn-sm" onclick="guardarEditEquipo(${i})">Guardar</button>
+      <button class="btn btn-sm" onclick="document.getElementById('eq-edit-wrap').innerHTML=''">✕</button>
+    </div>
+  </div>`;
+};
+window.guardarEditEquipo=async function(i){
+  const nombre=document.getElementById('eq-edit-nombre')?.value.trim();
+  const cat=document.getElementById('eq-edit-cat')?.value||'A';
+  if(!nombre)return;
+  const t=T();if(!t)return;
+  const lista=JSON.parse(JSON.stringify(t.equipos||[]));
+  lista[i]={nombre,categoria:cat};
+  await fupd(`torneos/${S.torneoActivo}`,{equipos:lista});
+};
+window.addEquipo=async function(){
+  const val=v('eq-input');if(!val)return;
+  const cat=document.getElementById('eq-cat')?.value||'A';
+  const t=T();if(!t)return;
+  const lista=JSON.parse(JSON.stringify(t.equipos||[]));
+  if(lista.find(e=>equipoNombre(e).toLowerCase()===val.toLowerCase())){
+    const msg=document.getElementById('eq-msg');
+    if(msg){msg.textContent='Ya existe un equipo con ese nombre.';msg.style.color='var(--c-danger)';}
+    return;
+  }
+  lista.push({nombre:val,categoria:cat});
+  await fupd(`torneos/${S.torneoActivo}`,{equipos:lista});
+  document.getElementById('eq-input').value='';
+};
+window.removeEquipo=async function(i){const t=T();if(!t)return;const lista=JSON.parse(JSON.stringify(t.equipos||[]));lista.splice(i,1);await fupd(`torneos/${S.torneoActivo}`,{equipos:lista});};
 
 // ── TAB FECHAS ───────────────────────────────────────────────
-function libres(fi){const t=T();if(!t)return[];const u=new Set();(t.fechas?.[fi]?.partidos||[]).forEach(p=>{u.add(p.local);u.add(p.visita);});return(t.equipos||[]).filter(e=>!u.has(e));}
+function libres(fi){const t=T();if(!t)return[];const u=new Set();(t.fechas?.[fi]?.partidos||[]).forEach(p=>{u.add(p.local);u.add(p.visita);});return(t.equipos||[]).filter(e=>!u.has(equipoNombre(e)));}
 function usadosEnFecha(fi){const t=T();if(!t)return new Set();const u=new Set();(t.fechas?.[fi]?.partidos||[]).forEach(p=>{u.add(p.local);u.add(p.visita);});return u;}
 function optsLocal(fi){
   const t=T();if(!t)return'';
   const usados=usadosEnFecha(fi);
-  return[...(t.equipos||[])].filter(e=>!usados.has(e)).sort((a,b)=>a.localeCompare(b,'es')).map(e=>`<option value="${e}">${e}</option>`).join('');
+  const disponibles=(t.equipos||[]).filter(e=>!usados.has(equipoNombre(e)));
+  // Agrupar por categoría
+  const porCat={};
+  disponibles.forEach(e=>{const c=equipoCategoria(e)||'Sin cat.';if(!porCat[c])porCat[c]=[];porCat[c].push(e);});
+  return Object.entries(porCat).sort((a,b)=>a[0].localeCompare(b[0])).map(([cat,eqs])=>
+    `<optgroup label="Categoría ${cat}">${eqs.sort((a,b)=>equipoNombre(a).localeCompare(equipoNombre(b),'es')).map(e=>`<option value="${equipoNombre(e)}">${equipoNombre(e)}</option>`).join('')}</optgroup>`
+  ).join('');
 }
 // Valor seleccionado de visita por fecha (mantenemos para compatibilidad con addPartido)
 const visitaSeleccionada={};
@@ -409,7 +483,12 @@ const visitaSeleccionada={};
 function optsVisita(fi,localSel){
   const t=T();if(!t)return'';
   const usados=usadosEnFecha(fi);
-  return[...(t.equipos||[])].filter(e=>e!==localSel&&!usados.has(e)).sort((a,b)=>a.localeCompare(b,'es')).map(e=>`<option value="${e}">${e}</option>`).join('');
+  const disponibles=(t.equipos||[]).filter(e=>equipoNombre(e)!==localSel&&!usados.has(equipoNombre(e)));
+  const porCat={};
+  disponibles.forEach(e=>{const c=equipoCategoria(e)||'Sin cat.';if(!porCat[c])porCat[c]=[];porCat[c].push(e);});
+  return Object.entries(porCat).sort((a,b)=>a[0].localeCompare(b[0])).map(([cat,eqs])=>
+    `<optgroup label="Categoría ${cat}">${eqs.sort((a,b)=>equipoNombre(a).localeCompare(equipoNombre(b),'es')).map(e=>`<option value="${equipoNombre(e)}">${equipoNombre(e)}</option>`).join('')}</optgroup>`
+  ).join('');
 }
 function cruceDup(local,visita,fi){const t=T();if(!t)return null;for(let i=0;i<(t.fechas||[]).length;i++){if(i===fi)continue;const f=t.fechas[i];const e=(f.partidos||[]).find(p=>(p.local===local&&p.visita===visita)||(p.local===visita&&p.visita===local));if(e)return{fi:i,nombre:f.nombre,inv:(e.local===visita)};}return null;}
 
@@ -599,7 +678,7 @@ window.duplicarFechas=async function(){
 };
 
 async function checkAutoTerminar(fi){
-  const t=T();if(!t)return;const f=(t.fechas||[])[fi];if(!f||f.estado==='terminada')return;
+  const t=T();if(!t)return;const f=(t.fechas||[])[fi];if(!f||f.estado==='terminada'||f.estado==='planificada')return;
   const ok=(f.partidos||[]).length>0&&(f.partidos||[]).every((_,pi)=>!!t.resultados?.[`${fi}-${pi}-signo`]);
   if(ok){const fechas=JSON.parse(JSON.stringify(t.fechas||[]));fechas[fi].estado='terminada';await fupd(`torneos/${S.torneoActivo}`,{fechas});}
 }
@@ -610,20 +689,45 @@ function rtResultados(el){
   if(!fechas.length){el.innerHTML='<p class="sub" style="margin-top:4px">No hay fechas.</p>';return;}
   el.innerHTML=fechas.map((f,fi)=>{
     const ec=ESTADO_COLOR[f.estado||'planificada'];
-    return`<div class="card" style="border-left:3px solid ${ec}">
-      <p style="font-weight:500;font-size:13px;margin-bottom:8px">${f.nombre} <span style="font-size:11px;color:${ec}">${ESTADO_LABEL[f.estado||'planificada']}</span></p>
+    const bloqueada=f.estado==='terminada';
+    return`<div class="card" style="border-left:3px solid ${ec}${bloqueada?';opacity:.75':''}">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:6px">
+        <p style="font-weight:500;font-size:13px">${f.nombre} <span style="font-size:11px;color:${ec}">${ESTADO_LABEL[f.estado||'planificada']}</span></p>
+        ${bloqueada
+          ?`<span style="font-size:11px;color:var(--c-text3)">🔒 Terminada — no editable</span>`
+          :`<button class="btn btn-sm btn-primary" onclick="guardarResultadosFecha(${fi})">💾 Guardar fecha</button>`}
+      </div>
       ${!(f.partidos||[]).length?'<p class="sub">Sin partidos.</p>':(f.partidos||[]).map((p,pi)=>{
         const signo=t.resultados?.[`${fi}-${pi}-signo`]||'';const res=t.resultados?.[`${fi}-${pi}`]||{gl:'',gv:''};
         return`<div class="partido-block">
-          <div class="partido-header"><div class="team-name">${p.local}</div><div class="vs-label">vs</div><div class="team-name">${p.visita}</div></div>
+          <div class="partido-header">
+            <div class="team-name">${(()=>{const eq=(t.equipos||[]).find(e=>equipoNombre(e)===p.local);const c=eq?equipoCategoria(eq):'';return p.local+(c?' <span style=\'font-size:10px;opacity:.6\'>['+c+']</span>':'');})()}</div>
+            <div class="vs-label">vs</div>
+            <div class="team-name">${(()=>{const eq=(t.equipos||[]).find(e=>equipoNombre(e)===p.visita);const c=eq?equipoCategoria(eq):'';return p.visita+(c?' <span style=\'font-size:10px;opacity:.6\'>['+c+']</span>':'');})()}</div>
+          </div>
           ${m.sistema==='1x2'
-            ?`<div class="signos"><button class="signo-btn ${signo==='1'?'sel-1':''}" onclick="setResS(${fi},${pi},'1')">1</button><button class="signo-btn ${signo==='X'?'sel-X':''}" onclick="setResS(${fi},${pi},'X')">X</button><button class="signo-btn ${signo==='2'?'sel-2':''}" onclick="setResS(${fi},${pi},'2')">2</button></div>`
-            :`<div class="score-wrap"><input class="score-inp" type="number" min="0" value="${res.gl}" placeholder="-" onchange="setResE(${fi},${pi},'gl',this.value)"/><span style="color:#aaa">-</span><input class="score-inp" type="number" min="0" value="${res.gv}" placeholder="-" onchange="setResE(${fi},${pi},'gv',this.value)"/></div>${signo?`<div style="text-align:center;margin-top:4px"><span class="badge ${signo==='1'?'badge-green':signo==='X'?'badge-amber':'badge-red'}">${signo==='1'?'Local gana':signo==='X'?'Empate':'Visita gana'}</span></div>`:''}`}
+            ?`<div class="signos">
+                <button class="signo-btn ${signo==='1'?'sel-1':''}" ${bloqueada?'disabled':''} onclick="setResS(${fi},${pi},'1')">1</button>
+                <button class="signo-btn ${signo==='X'?'sel-X':''}" ${bloqueada?'disabled':''} onclick="setResS(${fi},${pi},'X')">X</button>
+                <button class="signo-btn ${signo==='2'?'sel-2':''}" ${bloqueada?'disabled':''} onclick="setResS(${fi},${pi},'2')">2</button>
+              </div>`
+            :`<div class="score-wrap">
+                <input class="score-inp" type="number" min="0" value="${res.gl}" placeholder="-" ${bloqueada?'disabled':''} onchange="setResE(${fi},${pi},'gl',this.value)"/>
+                <span style="color:#aaa">-</span>
+                <input class="score-inp" type="number" min="0" value="${res.gv}" placeholder="-" ${bloqueada?'disabled':''} onchange="setResE(${fi},${pi},'gv',this.value)"/>
+              </div>${signo?`<div style="text-align:center;margin-top:4px"><span class="badge ${signo==='1'?'badge-green':signo==='X'?'badge-amber':'badge-red'}">${signo==='1'?'Local gana':signo==='X'?'Empate':'Visita gana'}</span></div>`:''}`}
         </div>`;
       }).join('')}
+      ${!bloqueada?`<p id="res-msg-${fi}" style="font-size:11px;text-align:right;margin-top:6px;min-height:14px;color:var(--c-success)"></p>`:''}
     </div>`;
   }).join('');
 }
+window.guardarResultadosFecha=async function(fi){
+  const t=T();if(!t)return;
+  // Ya se guardó en tiempo real con setResS/setResE, esto solo confirma visualmente
+  const el=document.getElementById('res-msg-'+fi);
+  if(el){el.textContent='✅ Guardado';setTimeout(()=>{if(el)el.textContent='';},2000);}
+};
 window.setResS=async function(fi,pi,signo){const t=T();if(!t)return;const res=JSON.parse(JSON.stringify(t.resultados||{}));const k=`${fi}-${pi}-signo`;res[k]=res[k]===signo?'':signo;await fupd(`torneos/${S.torneoActivo}`,{resultados:res});await checkAutoTerminar(fi);};
 window.setResE=async function(fi,pi,campo,val){const t=T();if(!t)return;const res=JSON.parse(JSON.stringify(t.resultados||{}));const key=`${fi}-${pi}`;if(!res[key])res[key]={gl:'',gv:''};res[key][campo]=val;const r=res[key];if(r.gl!==''&&r.gv!==''){const l=parseInt(r.gl),vv=parseInt(r.gv);res[`${fi}-${pi}-signo`]=l>vv?'1':l===vv?'X':'2';}await fupd(`torneos/${S.torneoActivo}`,{resultados:res});await checkAutoTerminar(fi);};
 
@@ -678,7 +782,11 @@ function rtPronos(el){
       const pron=t.pronosticos?.[`${fiReal}-${pi}-${uid}`]||{gl:'',gv:''};
       const editable=isAdmin||uid===S.uid;
       return`<div class="partido-block">
-        <div class="partido-header"><div class="team-name" style="font-size:11px">${pt.local}</div><div class="vs-label">vs</div><div class="team-name" style="font-size:11px">${pt.visita}</div></div>
+        <div class="partido-header">
+            <div class="team-name" style="font-size:11px">${(()=>{const eq=(t.equipos||[]).find(e=>equipoNombre(e)===pt.local);const c=eq?equipoCategoria(eq):'';return pt.local+(c?' <span style=\'font-size:9px;opacity:.6\'>['+c+']</span>':'');})()}</div>
+            <div class="vs-label">vs</div>
+            <div class="team-name" style="font-size:11px">${(()=>{const eq=(t.equipos||[]).find(e=>equipoNombre(e)===pt.visita);const c=eq?equipoCategoria(eq):'';return pt.visita+(c?' <span style=\'font-size:9px;opacity:.6\'>['+c+']</span>':'');})()}</div>
+          </div>
         ${m.sistema==='1x2'
           ?`<div class="signos">
               <button class="signo-btn ${signo==='1'?'sel-1':''}" ${!editable?'disabled':''} onclick="bufS(${fiReal},${pi},'${uid}','1')">1</button>
@@ -699,7 +807,11 @@ function rtPronos(el){
         <p style="font-weight:500;font-size:13px">${nombre}${p.dni?` <span style="font-size:11px;color:var(--c-text3)">[${p.dni}]</span>`:''}</p>
         <div style="display:flex;gap:6px;align-items:center">
           ${isAdmin?`<button class="ausencia-toggle ${aus?'ausente':''}" onclick="toggleAus(${fiReal},'${uid}')">${aus?'⛔ No juega':'✓ Juega'}</button>`:''}
-          ${editable&&!aus?`<button class="btn btn-sm btn-primary" onclick="guardarPron(${fiReal},'${uid}')">💾 Guardar</button>`:''}
+          ${(()=>{
+            const cerrado=!!(t.pronosticosCerrados?.[`${fiReal}-${uid}`]);
+            if(cerrado)return`<span style="font-size:11px;color:var(--c-text3)">🔒 Cerrado</span>`;
+            return editable&&!aus?`<button class="btn btn-sm btn-primary" onclick="guardarPron(${fiReal},'${uid}')">💾 Guardar</button>`:'';
+          })()}
         </div>
       </div>
       ${aus
@@ -766,6 +878,8 @@ window.toggleAus=async function(fi,uid){
 };
 
 window.bufS=function(fi,pi,uid,signo){
+  // Bloquear si cerrado
+  if(T()?.pronosticosCerrados?.[`${fi}-${uid}`]){alert('Este pronóstico ya fue guardado y cerrado definitivamente.');return;}
   const k=`${fi}-${pi}-${uid}-signo`;
   const prev=pronBuffer[k];
   pronBuffer[k]=prev===signo?'':signo;
@@ -783,12 +897,19 @@ window.bufS=function(fi,pi,uid,signo){
 window.bufE=function(fi,pi,uid,campo,val){const key=`${fi}-${pi}-${uid}`;if(!pronBuffer[key])pronBuffer[key]={gl:'',gv:''};pronBuffer[key][campo]=val;const p=pronBuffer[key];if(p.gl!==''&&p.gv!==''){const l=parseInt(p.gl),vv=parseInt(p.gv);pronBuffer[`${fi}-${pi}-${uid}-signo`]=l>vv?'1':l===vv?'X':'2';}};
 window.guardarPron=async function(fi,uid){
   const t=T();if(!t)return;
+  // Advertir que es definitivo
+  const p=allParts()[uid]||{};
+  const nombre=p.nombre?`${p.nombre} ${p.apellido}`:uid;
+  if(!confirm(`⚠️ Atención: una vez guardado, ${nombre} no podrá modificar su pronóstico para esta fecha.\n\n¿Confirmar y guardar definitivamente?`))return;
   const prons=JSON.parse(JSON.stringify(t.pronosticos||{}));
   Object.entries(pronBuffer).forEach(([k,val])=>{if(k.startsWith(`${fi}-`)&&k.includes(`-${uid}`))prons[k]=val;});
   Object.keys(pronBuffer).forEach(k=>{if(k.startsWith(`${fi}-`)&&k.includes(`-${uid}`))delete pronBuffer[k];});
-  await fupd(`torneos/${S.torneoActivo}`,{pronosticos:prons});
+  // Marcar como cerrado
+  const cerrados=JSON.parse(JSON.stringify(t.pronosticosCerrados||{}));
+  cerrados[`${fi}-${uid}`]=true;
+  await fupd(`torneos/${S.torneoActivo}`,{pronosticos:prons,pronosticosCerrados:cerrados});
   const el=document.getElementById(`smsg-${uid.slice(-6)}`);
-  if(el){el.textContent='✅ Guardado';setTimeout(()=>{if(el)el.textContent='';},2500);}
+  if(el){el.textContent='✅ Guardado y cerrado definitivamente';el.style.color='var(--c-success)';setTimeout(()=>{if(el)el.textContent='';},3000);}
 };
 window.cambiarFP=function(fi){const el=document.getElementById('tab-content');if(!el)return;el.dataset.fi=fi;renderTab('pronosticos');};
 window.toggleAus=async function(fi,uid){const t=T();if(!t)return;const aus=JSON.parse(JSON.stringify(t.ausencias||{}));const k=`${fi}-${uid}`;aus[k]=!aus[k];await fupd(`torneos/${S.torneoActivo}`,{ausencias:aus});};
