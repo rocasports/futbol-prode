@@ -92,8 +92,10 @@ async function handleUserLogin(user){
     await fset('config/global',{participantes:newParts});S.data.config.participantes=newParts;
   }
   const myPart=S.data.config.participantes[user.uid];
-  S.perfil=myPart||null;S.rol=isAdmin?'admin':'participante';
-  if(isAdmin){await startApp();return;}
+  S.perfil=myPart||null;
+  const isSA2=(cfgData.superadmins||[]).includes(user.uid);
+  S.rol=isSA2?'superadmin':((cfgData.admins||[]).includes(user.uid))?'admin':'participante';
+  if(isSA||isAdm){await startApp();return;}
   if(!myPart){renderAutoRegistro(user);return;}
   if(myPart.estado==='pendiente_aprobacion'){renderEspera(myPart);return;}
   if(myPart.estado==='rechazado'){renderRechazado();return;}
@@ -140,7 +142,7 @@ function suscribirTorneos(){
 function renderLogin(){
   setApp(`<div class="lw"><div class="lc">
     <div class="ll">⚽</div><h1 class="lt">Prode Fútbol</h1><p class="ls">Ingresá para participar</p>
-    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v2.1</p>
+    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v2.2</p>
     <button class="btn-google" onclick="loginGoogle()"><svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 6.29C4.672 4.163 6.656 3.58 9 3.58z"/></svg>Entrar con Google</button>
     <div class="ld">o con tu mail</div>
     <input id="login-mail" class="li" type="email" placeholder="tu@mail.com"/>
@@ -183,18 +185,18 @@ window.enviarRegistro=async function(){
 window.cerrarSesion=async function(){await signOut(auth);};
 
 function renderShell(){
-  const isAdmin=S.rol==='admin';
+  const isAdmin=S.rol==='admin'||S.rol==='superadmin';
   const nombre=S.perfil?`${S.perfil.nombre} ${S.perfil.apellido}`:(auth.currentUser?.email||'Admin');
   setApp(`<div class="layout">
     <div class="sidebar">
       <div class="sidebar-header">
         <span style="font-size:22px">⚽</span>
-        <div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${nombre}</div><div style="font-size:11px;color:var(--c-text2)">${isAdmin?'Administrador':'Participante'}</div></div>
+        <div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${nombre}</div><div style="font-size:11px;color:var(--c-text2)">${S.rol==='superadmin'?'Super Admin':S.rol==='admin'?'Administrador':'Participante'}</div></div>
         <button class="btn btn-sm" onclick="cerrarSesion()" style="padding:4px 8px">↩</button>
       </div>
       ${isAdmin?`<div class="ss">Global</div>
       <div class="ni" id="nav-participantes" onclick="navTo('participantes')">👥 Participantes <span id="bp" style="display:none;background:#dc2626;color:#fff;border-radius:10px;font-size:10px;padding:1px 6px;margin-left:auto"></span></div>
-      <div class="ni" id="nav-admins" onclick="navTo('admins')">🔑 Admins</div>`:`
+      <div class="ni" id="nav-admins" onclick="navTo('admins')">🔑 Admins</div>${S.rol==='superadmin'?'<div class="ni" id="nav-superadmin" onclick="navTo(\'superadmin\')">⭐ Super Admin</div>':''}`:`
       <div class="ss">Mi cuenta</div>
       <div class="ni" id="nav-miperfil" onclick="navTo('miperfil')">👤 Mis datos</div>`}
       <div class="ss">Torneos</div>
@@ -225,16 +227,18 @@ window.navTo=function(dest){
   const c=document.getElementById('content');
   if(dest==='participantes')renderViewParts(c);
   else if(dest==='admins')renderViewAdmins(c);
+  else if(dest==='superadmin')renderViewSuperAdmin(c);
   else if(dest==='miperfil')renderViewMiPerfil(c);
+  else if(dest==='otp')renderViewOTP(c);
   else if(dest==='nuevo-torneo')renderViewNuevoTorneo(c);
 };
 
 function refreshTorneoView(){
   const content=document.getElementById('content');if(!content||!S.torneoActivo)return;
   const t=T();if(!t){content.innerHTML='<div class="empty-state">Cargando...</div>';return;}
-  const isAdmin=S.rol==='admin';
+  const isAdmin=S.rol==='admin'||S.rol==='superadmin';
   const tabs=isAdmin?['participantes-t','equipos','fechas','resultados','pronosticos','pagos','premios','posiciones']:['pronosticos','posiciones'];
-  const labels={'participantes-t':'Participantes','equipos':'Equipos','fechas':'Fechas','resultados':'Resultados','pronosticos':'Pronósticos','pagos':'Pagos','premios':'Premios','posiciones':'Posiciones'};
+  const labels={'participantes-t':'Participantes','equipos':'Equipos','fechas':'Fechas','resultados':'Resultados','pronosticos':'Pronósticos','pagos':'Pagos','premios':'Premios','posiciones':'Posiciones','historial':'📋 Historial'};
   const curTab=content.dataset.activeTab;
   const activeTab=tabs.includes(curTab)?curTab:(isAdmin?'participantes-t':'pronosticos');
   const m=meta();
@@ -248,7 +252,7 @@ function refreshTorneoView(){
   content.dataset.activeTab=activeTab;renderTab(activeTab);
 }
 window.switchTab=function(id,el){document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));el.classList.add('active');document.getElementById('content').dataset.activeTab=id;renderTab(id);};
-function renderTab(id){const el=document.getElementById('tab-content');if(!el)return;({'participantes-t':rtParts,'equipos':rtEquipos,'fechas':rtFechas,'resultados':rtResultados,'pronosticos':rtPronos,'pagos':rtPagos,'premios':rtPremios,'posiciones':rtPos}[id]||(_=>{}))(el);}
+function renderTab(id){const el=document.getElementById('tab-content');if(!el)return;({'participantes-t':rtParts,'equipos':rtEquipos,'fechas':rtFechas,'resultados':rtResultados,'pronosticos':rtPronos,'pagos':rtPagos,'premios':rtPremios,'posiciones':rtPos,'historial':rtHistorial}[id]||(_=>{}))(el);}
 
 // ── PARTICIPANTES GLOBALES ───────────────────────────────────
 function renderViewParts(content){
@@ -340,6 +344,131 @@ window.guardarMiPerfil=async function(){
   const perfil={...S.perfil,nombre,apellido,dni,cel,mail,uid:S.uid};
   await fset('config/global',{participantes:{[S.uid]:perfil}});S.perfil=perfil;smsg('mp-msg','✅ Guardado');
 };
+
+function renderViewSuperAdmin(cnt){
+  if(S.rol!=='superadmin'){cnt.innerHTML='<p class="sub">Acceso denegado.</p>';return;}
+  const sas=(cfg().superadmins||[]);
+  const otp=cfg().otpCode||'';
+  const otpExp=cfg().otpExp||0;
+  const otpValido=otp&&otpExp>Date.now();
+  const minR=otpValido?Math.ceil((otpExp-Date.now())/60000):0;
+  cnt.innerHTML='<p class="section-title">Super Admin</p>'
+    +'<div class="card" style="border-color:var(--c-warn-border)">'
+    +'<p style="font-size:13px;font-weight:500;margin-bottom:8px;color:var(--c-warn)">Codigo de un solo uso para Admin</p>'
+    +'<p class="sub">Genera un codigo temporal (15 min) para que un Admin realice operaciones especiales.</p>'
+    +(otpValido
+      ?'<div style="background:var(--c-warn-bg);border:1px solid var(--c-warn-border);border-radius:8px;padding:12px;margin-bottom:8px;text-align:center">'
+        +'<p style="font-size:28px;font-weight:700;letter-spacing:6px;color:var(--c-warn)">'+otp+'</p>'
+        +'<p style="font-size:12px;color:var(--c-warn)">Expira en '+minR+' min</p>'
+        +'</div><button class="btn btn-sm btn-danger" onclick="revocarOTP()">Revocar</button>'
+      :'<div class="row" style="margin-top:8px">'
+        +'<select id="otp-torneo" style="max-width:220px">'+torneos().map(function(t){return'<option value="'+t.id+'">'+t.nombre+'</option>';}).join('')+'</select>'
+        +'<button class="btn btn-primary btn-sm" onclick="generarOTP()">Generar codigo</button>'
+        +'</div>')
+    +'</div>'
+    +'<div class="card" style="max-width:460px">'
+    +'<p style="font-size:13px;font-weight:500;margin-bottom:8px">Super Administradores</p>'
+    +'<p class="sub">Tu UID: <code>'+S.uid+'</code></p>'
+    +'<div class="row"><input id="sa-uid" placeholder="UID del nuevo super admin..."/>'
+    +'<button class="btn btn-primary btn-sm" onclick="addSuperAdmin()">Agregar</button></div>'
+    +'<div class="chips">'+sas.map(function(uid){return'<span class="chip">'+uid+'<span class="x" onclick="removeSuperAdmin(''+uid+'')">x</span></span>';}).join('')+'</div>'
+    +'</div>'
+    +'<div class="card" style="max-width:500px">'
+    +'<p style="font-size:13px;font-weight:500;margin-bottom:8px">Limpiar pronostico de participante</p>'
+    +'<div class="row"><label class="lbl">Torneo:</label><select id="op-torneo">'+torneos().map(function(t){return'<option value="'+t.id+'">'+t.nombre+'</option>';}).join('')+'</select></div>'
+    +'<div class="row"><label class="lbl">Participante:</label><select id="op-part">'+Object.entries(cfg().participantes||{}).filter(function(e){return e[1].estado==='activo';}).map(function(e){return'<option value="'+e[0]+'">'+e[1].nombre+' '+e[1].apellido+'</option>';}).join('')+'</select></div>'
+    +'<div class="row"><label class="lbl">Fecha:</label><select id="op-fecha"></select></div>'
+    +'<button class="btn btn-sm btn-danger" onclick="limpiarPronostico()">Limpiar pronostico</button>'
+    +'<p class="sub" style="margin-top:6px">El participante podra volver a cargarlo.</p>'
+    +'</div>';
+  var opT=document.getElementById('op-torneo');
+  if(opT){opT.addEventListener('change',poblarFechasOp);poblarFechasOp();}
+}
+function poblarFechasOp(){
+  var tid=document.getElementById('op-torneo')&&document.getElementById('op-torneo').value;
+  var sel=document.getElementById('op-fecha');if(!sel)return;
+  var td=tid?S.data.torneos[tid]:null;
+  sel.innerHTML=(td&&td.fechas||[]).map(function(f,i){return'<option value="'+i+'">'+f.nombre+'</option>';}).join('');
+}
+window.generarOTP=async function(){
+  var tid=document.getElementById('otp-torneo')&&document.getElementById('otp-torneo').value;
+  var otp=Math.random().toString(36).substring(2,8).toUpperCase();
+  await fset('config/global',{otpCode:otp,otpExp:Date.now()+15*60*1000,otpTorneo:torneos().find(function(t){return t.id===tid;})||{}});
+  renderViewSuperAdmin(document.getElementById('content'));
+};
+window.revocarOTP=async function(){
+  await fset('config/global',{otpCode:'',otpExp:0});
+  renderViewSuperAdmin(document.getElementById('content'));
+};
+window.addSuperAdmin=async function(){
+  var uid=document.getElementById('sa-uid')&&document.getElementById('sa-uid').value.trim();if(!uid)return;
+  var sas=[...(cfg().superadmins||[])];if(!sas.includes(uid))sas.push(uid);
+  await fset('config/global',{superadmins:sas});
+  document.getElementById('sa-uid').value='';
+};
+window.removeSuperAdmin=async function(uid){
+  if(uid===S.uid&&!confirm('Quitarte como super admin?'))return;
+  await fset('config/global',{superadmins:(cfg().superadmins||[]).filter(function(u){return u!==uid;})});
+};
+window.limpiarPronostico=async function(){
+  var tid=document.getElementById('op-torneo')&&document.getElementById('op-torneo').value;
+  var uid=document.getElementById('op-part')&&document.getElementById('op-part').value;
+  var fi=parseInt((document.getElementById('op-fecha')&&document.getElementById('op-fecha').value)||'0');
+  if(!tid||!uid)return alert('Selecciona torneo y participante');
+  if(!confirm('Limpiar el pronostico de este participante para esa fecha?'))return;
+  var td=S.data.torneos[tid];if(!td)return;
+  var prons=JSON.parse(JSON.stringify(td.pronosticos||{}));
+  Object.keys(prons).forEach(function(k){if(k.startsWith(fi+'-')&&k.includes('-'+uid))delete prons[k];});
+  await fupd('torneos/'+tid,{pronosticos:prons});
+  await logCambio('pronostico_limpiado','Participante '+uid+' Fecha indice '+fi,tid);
+  alert('Pronostico eliminado. El participante podra volver a cargarlo.');
+};
+
+function renderViewOTP(cnt){
+  cnt.innerHTML='<p class="section-title">Codigo Super Admin</p>'
+    +'<p class="sub">Ingresa el codigo que te dio el Super Admin.</p>'
+    +'<div class="card" style="max-width:380px">'
+    +'<div class="row"><input id="otp-input" placeholder="Codigo de 6 caracteres..." style="letter-spacing:4px;font-size:18px;text-transform:uppercase"/></div>'
+    +'<button class="btn btn-primary btn-sm" onclick="usarOTP()">Verificar</button>'
+    +'<p id="otp-msg" style="font-size:12px;margin-top:8px;min-height:16px"></p>'
+    +'</div>';
+}
+window.usarOTP=async function(){
+  var codigo=(document.getElementById('otp-input')&&document.getElementById('otp-input').value.trim().toUpperCase())||'';
+  if(!codigo)return;
+  if(cfg().otpCode===codigo&&cfg().otpExp>Date.now()){
+    S.rol='superadmin';
+    await fset('config/global',{otpCode:'',otpExp:0});
+    await logCambio('otp_usado','Admin uso codigo super admin',S.torneoActivo||(cfg().torneos||[])[0]&&cfg().torneos[0].id);
+    alert('Codigo verificado. Tenes acceso Super Admin por esta sesion.');
+    renderShell();
+  } else {
+    var el=document.getElementById('otp-msg');
+    if(el){el.textContent='Codigo invalido o expirado.';el.style.color='var(--c-danger)';}
+  }
+};
+
+function rtHistorial(el){
+  var t=T();if(!t)return;
+  var hist=t.historial||[];
+  if(!hist.length){el.innerHTML='<p class="sub" style="margin-top:8px">Sin registros aun.</p>';return;}
+  var rows=hist.slice(0,150).map(function(e){
+    var d=new Date(e.ts);
+    var fecha=d.toLocaleDateString('es')+' '+d.toLocaleTimeString('es',{hour:'2-digit',minute:'2-digit'});
+    var rolColor=e.rol==='superadmin'?'var(--c-warn)':e.rol==='admin'?'var(--c-info)':'var(--c-text2)';
+    return'<tr>'
+      +'<td style="white-space:nowrap;font-size:11px;color:var(--c-text2)">'+fecha+'</td>'
+      +'<td style="font-weight:500;white-space:nowrap">'+e.nombre+'</td>'
+      +'<td><span style="font-size:11px;color:'+rolColor+'">'+e.rol+'</span></td>'
+      +'<td style="font-size:12px">'+e.accion+'</td>'
+      +'<td style="font-size:12px;color:var(--c-text2)">'+e.detalle+'</td>'
+      +'</tr>';
+  }).join('');
+  el.innerHTML='<p class="sub" style="margin-top:4px">Ultimos '+Math.min(hist.length,150)+' registros.</p>'
+    +'<div style="overflow-x:auto"><table>'
+    +'<thead><tr><th>Fecha/hora</th><th>Usuario</th><th>Rol</th><th>Accion</th><th>Detalle</th></tr></thead>'
+    +'<tbody>'+rows+'</tbody></table></div>';
+}
 
 function renderViewNuevoTorneo(content){
   content.innerHTML=`<p class="section-title">Nuevo torneo</p><div class="card" style="max-width:420px">
@@ -523,7 +652,9 @@ window.cambiarEstado=async function(fi,nuevoEstado){
     const otra=fechas.findIndex((f,i)=>i!==fi&&f.estado==='activa');
     if(otra>=0){alert(`Ya hay una fecha activa: "${fechas[otra].nombre}". Terminala primero.`);refreshTorneoView();return;}
   }
+  const estAnterior=(T()?.fechas||[])[fi]?.estado||'planificada';
   fechas[fi].estado=nuevoEstado;await fupd(`torneos/${S.torneoActivo}`,{fechas});
+  await logCambio('estado_fecha_cambiado',`${(T()?.fechas||[])[fi]?.nombre}: ${estAnterior} -> ${nuevoEstado}`);
 };
 
 window.moverF=async function(fi,dir){
@@ -628,6 +759,28 @@ window.setResS=async function(fi,pi,signo){const t=T();if(!t)return;const res=JS
 window.setResE=async function(fi,pi,campo,val){const t=T();if(!t)return;const res=JSON.parse(JSON.stringify(t.resultados||{}));const key=`${fi}-${pi}`;if(!res[key])res[key]={gl:'',gv:''};res[key][campo]=val;const r=res[key];if(r.gl!==''&&r.gv!==''){const l=parseInt(r.gl),vv=parseInt(r.gv);res[`${fi}-${pi}-signo`]=l>vv?'1':l===vv?'X':'2';}await fupd(`torneos/${S.torneoActivo}`,{resultados:res});await checkAutoTerminar(fi);};
 
 // ── TAB PRONÓSTICOS ──────────────────────────────────────────
+// ── AUDIT LOG ────────────────────────────────────────────────
+async function logCambio(accion, detalle, torneoId){
+  const tid=torneoId||S.torneoActivo;
+  if(!tid)return;
+  const p=S.perfil;
+  const entry={
+    uid:S.uid,
+    nombre:p?`${p.nombre} ${p.apellido}`:(S.rol==='superadmin'?'SuperAdmin':'Admin'),
+    rol:S.rol,
+    accion,
+    detalle,
+    ts:new Date().toISOString()
+  };
+  try{
+    const t=S.data.torneos[tid];
+    const hist=JSON.parse(JSON.stringify(t?.historial||[]));
+    hist.unshift(entry); // más reciente primero
+    if(hist.length>300)hist.length=300;
+    await fupd(`torneos/${tid}`,{historial:hist});
+  }catch(e){console.warn('Log error:',e);}
+}
+
 function rtPronos(el){
   const t=T();if(!t)return;const m=meta();const fechas=t.fechas||[];
   const isAdmin=S.rol==='admin';
@@ -766,6 +919,23 @@ window.toggleAus=async function(fi,uid){
 };
 
 window.bufS=function(fi,pi,uid,signo){
+  const t=T();if(!t)return;
+  // Admin no puede tocar pronósticos (solo superadmin puede)
+  if(S.rol==='admin'){alert('Los administradores no pueden modificar pronósticos.');return;}
+  // Participante solo puede tocar el suyo
+  if(S.rol==='participante'&&uid!==S.uid){return;}
+  const fecha=(t.fechas||[])[fi];
+  if(!fecha)return;
+  // Bloquear si fecha no está Activa (salvo superadmin)
+  if(!isSuperAdmin()&&fecha.estado!=='activa'){
+    alert(`No podés pronosticar: la fecha está "${ESTADO_LABEL[fecha.estado||'planificada']}".`);return;
+  }
+  // Bloquear si ya hay resultados (salvo superadmin)
+  const hayRes=(fecha.partidos||[]).some((_,pi2)=>!!t.resultados?.[`${fi}-${pi2}-signo`]);
+  if(!isSuperAdmin()&&hayRes){
+    alert('Ya hay resultados cargados: el pronóstico está cerrado.');return;
+  }
+
   const k=`${fi}-${pi}-${uid}-signo`;
   const prev=pronBuffer[k];
   pronBuffer[k]=prev===signo?'':signo;
@@ -780,13 +950,25 @@ window.bufS=function(fi,pi,uid,signo){
     });
   });
 };
-window.bufE=function(fi,pi,uid,campo,val){const key=`${fi}-${pi}-${uid}`;if(!pronBuffer[key])pronBuffer[key]={gl:'',gv:''};pronBuffer[key][campo]=val;const p=pronBuffer[key];if(p.gl!==''&&p.gv!==''){const l=parseInt(p.gl),vv=parseInt(p.gv);pronBuffer[`${fi}-${pi}-${uid}-signo`]=l>vv?'1':l===vv?'X':'2';}};
+window.bufE=function(fi,pi,uid,campo,val){
+  const t=T();if(!t)return;
+  if(S.rol==='admin'){alert('Los administradores no pueden modificar pronósticos.');return;}
+  if(S.rol==='participante'&&uid!==S.uid){return;}
+  const fecha=(t.fechas||[])[fi];
+  if(!fecha)return;
+  if(!isSuperAdmin()&&fecha.estado!=='activa'){
+    alert(`Fecha "${ESTADO_LABEL[fecha.estado||'planificada']}": no se puede pronosticar.`);return;
+  }
+  const hayRes=(fecha.partidos||[]).some((_,pi2)=>!!t.resultados?.[`${fi}-${pi2}-signo`]);
+  if(!isSuperAdmin()&&hayRes){alert('Ya hay resultados: pronóstico cerrado.');return;}
+const key=`${fi}-${pi}-${uid}`;if(!pronBuffer[key])pronBuffer[key]={gl:'',gv:''};pronBuffer[key][campo]=val;const p=pronBuffer[key];if(p.gl!==''&&p.gv!==''){const l=parseInt(p.gl),vv=parseInt(p.gv);pronBuffer[`${fi}-${pi}-${uid}-signo`]=l>vv?'1':l===vv?'X':'2';}};
 window.guardarPron=async function(fi,uid){
   const t=T();if(!t)return;
   const prons=JSON.parse(JSON.stringify(t.pronosticos||{}));
   Object.entries(pronBuffer).forEach(([k,val])=>{if(k.startsWith(`${fi}-`)&&k.includes(`-${uid}`))prons[k]=val;});
   Object.keys(pronBuffer).forEach(k=>{if(k.startsWith(`${fi}-`)&&k.includes(`-${uid}`))delete pronBuffer[k];});
   await fupd(`torneos/${S.torneoActivo}`,{pronosticos:prons});
+  await logCambio('pronóstico_guardado',`${nombrePart(uid)} — Fecha índice ${fi}`);
   const el=document.getElementById(`smsg-${uid.slice(-6)}`);
   if(el){el.textContent='✅ Guardado';setTimeout(()=>{if(el)el.textContent='';},2500);}
 };
