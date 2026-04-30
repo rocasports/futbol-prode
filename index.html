@@ -995,7 +995,13 @@ function rtPronos(el){
     ${alertaPron}
     <div id="pron-cards">${partCards}</div>`;
 }
-window.cambiarFP=function(fi){const el=document.getElementById('tab-content');if(!el)return;el.dataset.fi=fi;renderTab('pronosticos');};
+window.cambiarFP=function(fi){
+  const el=document.getElementById('tab-content');if(!el)return;
+  pronFechaIdx=parseInt(fi); // actualizar variable global
+  pronosExpandidos.clear();
+  el.dataset.fi=String(fi);
+  renderTab('pronosticos');
+};
 window.filtrarPronos=function(val){
   // Cambia fecha → re-render completo
   const el=document.getElementById('tab-content');if(!el)return;
@@ -1021,7 +1027,13 @@ window.filtrarPronDom=function(val){
     card.style.display=!busq||txt.includes(busq)?'':'none';
   });
 }
-window.cambiarFP=function(fi){const el=document.getElementById('tab-content');if(!el)return;el.dataset.fi=fi;renderTab('pronosticos');};
+window.cambiarFP=function(fi){
+  const el=document.getElementById('tab-content');if(!el)return;
+  pronFechaIdx=parseInt(fi); // actualizar variable global
+  pronosExpandidos.clear();
+  el.dataset.fi=String(fi);
+  renderTab('pronosticos');
+};
 window.filtrarPronos=function(val){
   const el=document.getElementById('tab-content');if(!el)return;
   el.dataset.busqPron=val;
@@ -1103,7 +1115,13 @@ window.guardarPron=async function(fi,uid){
   const el=document.getElementById(`smsg-${uid.slice(-6)}`);
   if(el){el.textContent='✅ Guardado y cerrado definitivamente';el.style.color='var(--c-success)';setTimeout(()=>{if(el)el.textContent='';},3000);}
 };
-window.cambiarFP=function(fi){const el=document.getElementById('tab-content');if(!el)return;el.dataset.fi=fi;renderTab('pronosticos');};
+window.cambiarFP=function(fi){
+  const el=document.getElementById('tab-content');if(!el)return;
+  pronFechaIdx=parseInt(fi); // actualizar variable global
+  pronosExpandidos.clear();
+  el.dataset.fi=String(fi);
+  renderTab('pronosticos');
+};
 window.toggleAus=async function(fi,uid){const t=T();if(!t)return;const aus=JSON.parse(JSON.stringify(t.ausencias||{}));const k=`${fi}-${uid}`;aus[k]=!aus[k];await fupd(`torneos/${S.torneoActivo}`,{ausencias:aus});};
 
 // ── TAB PAGOS ────────────────────────────────────────────────
