@@ -147,7 +147,7 @@ function suscribirTorneos(){
 function renderLogin(){
   setApp(`<div class="lw"><div class="lc">
     <div class="ll">⚽</div><h1 class="lt">Prode Fútbol</h1><p class="ls">Ingresá para participar</p>
-    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v2.6</p>
+    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v2.7</p>
     <button class="btn-google" onclick="loginGoogle()"><svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 6.29C4.672 4.163 6.656 3.58 9 3.58z"/></svg>Entrar con Google</button>
     <div class="ld">o con tu mail</div>
     <input id="login-mail" class="li" type="email" placeholder="tu@mail.com"/>
@@ -240,7 +240,7 @@ function refreshTorneoView(){
   const content=document.getElementById('content');if(!content||!S.torneoActivo)return;
   const t=T();if(!t){content.innerHTML='<div class="empty-state">Cargando...</div>';return;}
   const isAdmin=S.rol==='admin';
-  const tabs=isAdmin?['participantes-t','equipos','fechas','resultados','pronosticos','pagos','premios','posiciones']:['pronosticos','posiciones'];
+  const tabs=isAdmin?['participantes-t','equipos','fechas','resultados','pronosticos','pagos','premios','posiciones']:['pronosticos','resultados-hist','posiciones'];
   const labels={'participantes-t':'Participantes','equipos':'Equipos','fechas':'Fechas','resultados':'Resultados','pronosticos':'Pronósticos','pagos':'Pagos','premios':'Premios','posiciones':'Posiciones'};
   const curTab=content.dataset.activeTab;
   const activeTab=tabs.includes(curTab)?curTab:(isAdmin?'participantes-t':'pronosticos');
@@ -531,7 +531,18 @@ function rtFechas(el){
   ${!fechas.length?'<p class="sub">No hay fechas aún.</p>':fechas.map((f,fi)=>{
     const lib=libres(fi);const opts=lib.map(e=>`<option>${e}</option>`).join(''); // opts usado como fallback
     const ec=ESTADO_COLOR[f.estado||'planificada'];
-    return`<div class="card" style="border-left:3px solid ${ec}">
+    const expandida=f.estado==='activa'||f.estado==='en ejecucion';
+    return`<div class="card" style="border-left:3px solid ${ec};margin-bottom:6px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:6px;cursor:pointer" onclick="toggleFechaCard(this)">
+        <div>
+          <span style="font-weight:500;font-size:13px">${f.nombre}</span>
+          ${f.numero?`<span style="font-size:11px;color:var(--c-text2);margin-left:6px">Nº${f.numero}</span>`:''}
+          <span style="font-size:11px;margin-left:6px;color:${ec}">${ESTADO_LABEL[f.estado||'planificada']}</span>
+          ${f.inicio?`<span style="font-size:11px;color:var(--c-text2);margin-left:6px">📅 ${f.inicio}</span>`:''}
+        </div>
+        <span class="fecha-toggle-arrow">${expandida?'▲':'▼'}</span>
+      </div>
+      <div class="fecha-card-body" style="display:${expandida?'block':'none'};margin-top:8px">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;flex-wrap:wrap;gap:6px">
         <div style="flex:1;min-width:0">
           ${editandoFecha===fi?`
@@ -572,7 +583,7 @@ function rtFechas(el){
       ${lib.length>=2
         ?`<div class="row" style="margin-top:6px"><select id="local-${fi}" onchange="actualizarVisita(${fi})">${optsLocal(fi)}</select><span style="color:#aaa;font-size:11px">vs</span><select id="visita-${fi}">${optsVisita(fi,document.getElementById('local-'+fi)?.value||'')}</select><button class="btn btn-sm btn-primary" onclick="addPartido(${fi})">+ Partido</button></div>`
         :`<p style="font-size:11px;color:var(--c-text2);margin-top:6px">${lib.length===1?'Solo queda 1 equipo.':'Todos los equipos asignados.'}</p>`}
-    </div>`;
+      </div></div>`;
   }).join('')}`;
 }
 
@@ -584,6 +595,15 @@ window.ordenarFechas=async function(dir){
     return dir==='asc'?na-nb:nb-na;
   });
   await fupd(`torneos/${S.torneoActivo}`,{fechas});
+};
+
+window.toggleFechaCard=function(header){
+  const body=header.parentElement.querySelector('.fecha-card-body');
+  const arrow=header.querySelector('.fecha-toggle-arrow');
+  if(!body)return;
+  const abierto=body.style.display!=='none';
+  body.style.display=abierto?'none':'block';
+  if(arrow)arrow.textContent=abierto?'▼':'▲';
 };
 
 window.addFecha=async function(){
@@ -606,9 +626,12 @@ window.cambiarEstado=async function(fi,nuevoEstado){
     alert(`La fecha "${f.nombre}" ya tiene premios publicados y no puede modificarse.`);
     refreshTorneoView();return;
   }
-  if(nuevoEstado==='activa'){
-    const otra=fechas.findIndex((f,i)=>i!==fi&&f.estado==='activa');
-    if(otra>=0){alert(`Ya hay una fecha activa: "${fechas[otra].nombre}". Terminala primero.`);refreshTorneoView();return;}
+  if(nuevoEstado==='activa'||nuevoEstado==='en ejecucion'){
+    const otra=fechas.findIndex((f,i)=>i!==fi&&(f.estado==='activa'||f.estado==='en ejecucion'));
+    if(otra>=0){
+      alert(`Ya hay una fecha en estado "${ESTADO_LABEL[fechas[otra].estado]}": "${fechas[otra].nombre}".\nCambiá su estado antes de activar otra.`);
+      refreshTorneoView();return;
+    }
   }
   fechas[fi].estado=nuevoEstado;await fupd(`torneos/${S.torneoActivo}`,{fechas});
 };
@@ -696,9 +719,15 @@ function rtResultados(el){
   el.innerHTML=fechas.map((f,fi)=>{
     const ec=ESTADO_COLOR[f.estado||'planificada'];
     const bloqueada=f.estado==='terminada';
-    return`<div class="card" style="border-left:3px solid ${ec}${bloqueada?';opacity:.75':''}">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:6px">
-        <p style="font-weight:500;font-size:13px">${f.nombre} <span style="font-size:11px;color:${ec}">${ESTADO_LABEL[f.estado||'planificada']}</span></p>
+    const expandidaR=f.estado==='activa'||f.estado==='en ejecucion';
+    return`<div class="card" style="border-left:3px solid ${ec}${bloqueada?';opacity:.85':''}">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;cursor:pointer;padding-bottom:${expandidaR?'8':'0'}px" onclick="toggleResCard(this)">
+        <p style="font-weight:500;font-size:13px;margin:0">${f.nombre} <span style="font-size:11px;color:${ec}">${ESTADO_LABEL[f.estado||'planificada']}</span></p>
+        <span>${expandidaR?'▲':'▼'}</span>
+      </div>
+      <div style="display:${expandidaR?'block':'none'}">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:6px;margin-top:8px">
+        <span></span>
         ${bloqueada
           ?`<span style="font-size:11px;color:var(--c-text3)">🔒 Terminada — no editable</span>`
           :`<button class="btn btn-sm btn-primary" onclick="guardarResultadosFecha(${fi})">💾 Guardar fecha</button>`}
@@ -725,9 +754,20 @@ function rtResultados(el){
         </div>`;
       }).join('')}
       ${!bloqueada?`<p id="res-msg-${fi}" style="font-size:11px;text-align:right;margin-top:6px;min-height:14px;color:var(--c-success)"></p>`:''}
-    </div>`;
+      </div></div>`;
   }).join('');
 }
+window.toggleResCard=function(header){
+  const body=header.nextElementSibling;
+  if(!body)return;
+  const abierto=body.style.display!=='none';
+  body.style.display=abierto?'none':'block';
+  const arrow=header.querySelector('span:last-child');
+  if(arrow)arrow.textContent=abierto?'▼':'▲';
+  if(!abierto)header.style.paddingBottom='8px';
+  else header.style.paddingBottom='0';
+};
+
 window.guardarResultadosFecha=async function(fi){
   const t=T();if(!t)return;
   const f=(t.fechas||[])[fi];if(!f)return;
@@ -877,6 +917,7 @@ function rtPronos(el){
 
       // Botón guardar / estado cerrado
       const btnGuardar=(()=>{
+        if(S.rol==='admin')return''; // admin no guarda pronósticos
         if(cerrado&&S.rol==='participante'&&uid===S.uid)
           return`<span style="font-size:11px;color:var(--c-text3)">🔒 Pronóstico cerrado</span>`;
         if(editable)
@@ -885,16 +926,20 @@ function rtPronos(el){
       })();
 
       return`<div class="pron-card card" data-busq="${busqData}">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:6px">
-          <p style="font-weight:500;font-size:13px">${nombre}</p>
-          <div style="display:flex;gap:6px;align-items:center">
-            ${isAdmin?`<button class="ausencia-toggle ${!ausente(fiReal,uid)?'':'ausente'}" onclick="toggleAus(${fiReal},'${uid}')">${!ausente(fiReal,uid)?'✓ Habilitado':'⛔ No habilitado'}</button>`:''}
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;cursor:pointer" onclick="togglePronCard(this)">
+          <p style="font-weight:500;font-size:13px;margin:0">${nombre}${cerrado?'<span style="font-size:10px;color:var(--c-text3);margin-left:6px">🔒</span>':''}</p>
+
+          <span class="pron-arrow">▼</span>
+        </div>
+        <div class="pron-body" style="display:none;margin-top:8px">
+          <div style="display:flex;justify-content:flex-end;margin-bottom:6px;gap:6px">
+            ${isAdmin?`<button class="ausencia-toggle ${!ausente(fiReal,uid)?'':'ausente'}" onclick="event.stopPropagation();toggleAus(${fiReal},'${uid}')">${!ausente(fiReal,uid)?'✓ Habilitado':'⛔ No habilitado'}</button>`:''}
             ${btnGuardar}
           </div>
+          ${bloques}
+          ${totalPts!==null?`<div style="text-align:right;font-size:11px;color:var(--c-text2);margin-top:4px">Total fecha: <strong>${totalPts} pts</strong></div>`:''}
+          <p id="smsg-${uid.slice(-6)}" style="font-size:11px;text-align:right;margin-top:4px;min-height:14px;color:var(--c-success)"></p>
         </div>
-        ${bloques}
-        ${totalPts!==null?`<div style="text-align:right;font-size:11px;color:var(--c-text2);margin-top:4px">Total fecha: <strong>${totalPts} pts</strong></div>`:''}
-        <p id="smsg-${uid.slice(-6)}" style="font-size:11px;text-align:right;margin-top:4px;min-height:14px;color:var(--c-success)"></p>
       </div>`;
     }).join('');
 
@@ -916,6 +961,16 @@ window.filtrarPronos=function(val){
   const el=document.getElementById('tab-content');if(!el)return;
   el.dataset.busqPron=val;renderTab('pronosticos');
 };
+window.togglePronCard=function(header){
+  const card=header.parentElement;
+  const body=card.querySelector('.pron-body');
+  const arrow=header.querySelector('.pron-arrow');
+  if(!body)return;
+  const abierto=body.style.display!=='none';
+  body.style.display=abierto?'none':'block';
+  if(arrow)arrow.textContent=abierto?'▼':'▲';
+};
+
 window.filtrarPronDom=function(val){
   // Filtra sin re-render: solo show/hide de cards existentes
   const busq=val.trim().toLowerCase();
@@ -955,10 +1010,16 @@ window.toggleAus=async function(fi,uid){
   } else {
     aus[k]=true;
   }
+  // Preservar la fecha expandida en Pronósticos
+  const tabEl=document.getElementById('tab-content');
+  const fiV=tabEl?.dataset.fi;
   await fupd(`torneos/${S.torneoActivo}`,{ausencias:aus});
+  // Restaurar la fecha después del re-render
+  if(tabEl&&fiV!==undefined)tabEl.dataset.fi=fiV;
 };
 
 window.bufS=function(fi,pi,uid,signo){
+  if(S.rol==='admin'){alert('El administrador no puede modificar pronósticos de participantes.');return;}
   if(S.rol==='participante'){
     if(uid!==S.uid)return;
     if(T()?.pronosticosCerrados?.[`${fi}-${uid}`]){alert('Ya guardaste tu pronóstico y no podés modificarlo.');return;}
@@ -1266,6 +1327,19 @@ function rtPremios(el){
   <button class="btn btn-primary btn-sm" onclick="guardarPremios()">Guardar y calcular</button>
   <div class="card" style="margin-top:8px"><p style="font-size:12px;font-weight:500;margin-bottom:6px">Resumen</p><div id="premios-resumen">${premiosHTML()}</div></div>`;
 }
+window.publicarResultados=async function(){
+  const fi=parseInt(document.getElementById('pub-fecha')?.value??'-1');
+  const texto=document.getElementById('pub-texto')?.value.trim()||'';
+  if(fi<0)return;
+  if(!confirm('¿Publicar los resultados de esta fecha? Los participantes podrán verlos inmediatamente.'))return;
+  const t=T();if(!t)return;
+  const pub=JSON.parse(JSON.stringify(t.resultadosPublicados||{}));
+  pub[fi]={texto,ts:new Date().toISOString()};
+  await fupd(`torneos/${S.torneoActivo}`,{resultadosPublicados:pub});
+  const msg=document.getElementById('pub-msg');
+  if(msg){msg.textContent='✅ Publicado';msg.style.color='var(--c-success)';setTimeout(()=>{if(msg)msg.textContent='';},2500);}
+};
+
 window.guardarPremios=async function(){
   const cfg={montoFecha:parseFloat(document.getElementById('pfm').value)||0,condicion:document.getElementById('pcond').value,premio1:parseFloat(document.getElementById('pm1').value)||0,premio2:parseFloat(document.getElementById('pm2').value)||0,premio3:parseFloat(document.getElementById('pm3').value)||0};
   await fupd(`torneos/${S.torneoActivo}`,{premiosCfg:cfg});document.getElementById('premios-resumen').innerHTML=premiosHTML();
@@ -1285,6 +1359,126 @@ function premiosHTML(){
 }
 
 // ── TAB POSICIONES ───────────────────────────────────────────
+// ── TAB RESULTADOS HISTÓRICO (participante) ──────────────────
+function rtResultadosHist(el){
+  const t=T();if(!t)return;const m=meta();
+  const uid=S.uid;
+  // Solo fechas terminadas con resultados publicados
+  const fechas=(t.fechas||[]).filter(f=>f.estado==='terminada'&&t.resultadosPublicados?.[t.fechas.indexOf(f)]);
+  if(!fechas.length){
+    el.innerHTML='<p class="sub" style="margin-top:8px">Todavía no hay fechas con resultados publicados.</p>';
+    return;
+  }
+  // Buscar
+  const busq=el.dataset.busqRes||'';
+  const fiUltima=t.fechas.indexOf(fechas[fechas.length-1]);
+
+  el.innerHTML=`<div style="margin-bottom:10px">
+    <input type="search" placeholder="🔍 Buscar por número o nombre de fecha..." value="${busq}"
+      style="width:100%;max-width:360px;padding:6px 10px;font-size:13px;border:1px solid var(--c-border);border-radius:8px;background:var(--c-bg);color:var(--c-text)"
+      oninput="filtrarResHist(this.value)"/>
+  </div>
+  <div id="res-hist-cards">
+  ${[...fechas].reverse().map((f,idx)=>{
+    const fi=t.fechas.indexOf(f);
+    const esUltima=fi===fiUltima;
+    const ec=ESTADO_COLOR[f.estado||'terminada'];
+    const haJugado=!ausente(fi,uid);
+    // Puntos del participante en esta fecha
+    let ptsTotales=0;let hayPts=false;
+    const partidos=(f.partidos||[]).map((p,pi)=>{
+      const rs=t.resultados?.[`${fi}-${pi}-signo`]||'';
+      const ps=t.pronosticos?.[`${fi}-${pi}-${uid}-signo`]||'';
+      const res=t.resultados?.[`${fi}-${pi}`]||{};
+      const pron=t.pronosticos?.[`${fi}-${pi}-${uid}`]||{};
+      let pts=null;
+      if(rs&&ps){
+        if(m.sistema==='1x2'){pts=ps===rs?1:0;}
+        else{
+          if(pron.gl!==''&&pron.gl!==undefined&&res.gl!==''){
+            if(parseInt(pron.gl)===parseInt(res.gl)&&parseInt(pron.gv)===parseInt(res.gv))pts=3;
+            else pts=ps===rs?1:0;
+          }
+        }
+        if(pts!==null){ptsTotales+=pts;hayPts=true;}
+      }
+      const eqL=(t.equipos||[]).find(e=>equipoNombre(e)===p.local);
+      const eqV=(t.equipos||[]).find(e=>equipoNombre(e)===p.visita);
+      const catL=eqL?equipoCategoria(eqL):'';
+      const catV=eqV?equipoCategoria(eqV):'';
+      return`<div class="partido-block">
+        <div class="partido-header">
+          <div class="team-name">${p.local}${catL?` <span style="font-size:9px;opacity:.6">[${catL}]</span>`:''}</div>
+          <div class="vs-label">vs</div>
+          <div class="team-name">${p.visita}${catV?` <span style="font-size:9px;opacity:.6">[${catV}]</span>`:''}</div>
+        </div>
+        <div style="display:flex;justify-content:space-around;margin-top:6px;gap:8px;font-size:12px">
+          <div style="text-align:center">
+            <div style="color:var(--c-text3);font-size:10px">Resultado</div>
+            <div style="font-weight:500">${m.sistema==='1x2'?(rs?`<span class="badge ${rs==='1'?'badge-green':rs==='X'?'badge-amber':'badge-red'}">${rs==='1'?'Local':rs==='X'?'Empate':'Visita'}</span>`:'—'):(res.gl!==''&&res.gl!==undefined?res.gl+'-'+res.gv:'—')}</div>
+          </div>
+          ${haJugado?`<div style="text-align:center">
+            <div style="color:var(--c-text3);font-size:10px">Tu pronóstico</div>
+            <div style="font-weight:500">${m.sistema==='1x2'?(ps?`<span class="badge ${ps===rs?'badge-green':'badge-red'}">${ps==='1'?'Local':ps==='X'?'Empate':'Visita'}</span>`:'—'):(pron.gl!==''&&pron.gl!==undefined?pron.gl+'-'+pron.gv:'—')}</div>
+          </div>
+          <div style="text-align:center">
+            <div style="color:var(--c-text3);font-size:10px">Pts</div>
+            <div>${pts!==null?`<span class="badge ${pts>0?'badge-green':'badge-red'}">${pts}</span>`:'—'}</div>
+          </div>`:
+          `<div style="text-align:center;color:var(--c-text3);font-size:11px">No jugaste</div>`}
+        </div>
+      </div>`;
+    }).join('');
+
+    // Ganadores y premios publicados
+    const premios=t.resultadosPublicados?.[fi]||{};
+    const premiosHTML=premios.texto?`<div style="background:var(--c-success-bg);border:1px solid var(--c-success-border);border-radius:8px;padding:10px;margin-top:8px;font-size:12px">
+      <p style="font-weight:500;color:var(--c-success);margin-bottom:4px">🏆 Premios</p>
+      <p style="white-space:pre-line">${premios.texto}</p>
+    </div>`:'';
+
+    return`<div class="card res-hist-card" data-busq-res="${(f.nombre||'')+' '+(f.numero||'')}">
+      <div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="toggleResHistCard(this)">
+        <div>
+          <span style="font-weight:500;font-size:13px">${f.nombre}</span>
+          ${f.numero?`<span style="font-size:11px;color:var(--c-text2);margin-left:6px">Nº${f.numero}</span>`:''}
+          ${hayPts?`<span style="font-size:12px;margin-left:8px" class="badge badge-green">${ptsTotales} pts</span>`:''}
+        </div>
+        <span>${esUltima?'▲':'▼'}</span>
+      </div>
+      <div class="res-hist-body" style="display:${esUltima?'block':'none'};margin-top:8px">
+        ${!haJugado?'<p class="sub">No participaste en esta fecha.</p>':partidos}
+        ${premiosHTML}
+      </div>
+    </div>`;
+  }).join('')}
+  </div>`;
+}
+window.toggleResHistCard=function(header){
+  const body=header.nextElementSibling;
+  const arrow=header.querySelector('span:last-child');
+  if(!body)return;
+  const abierto=body.style.display!=='none';
+  body.style.display=abierto?'none':'block';
+  if(arrow)arrow.textContent=abierto?'▼':'▲';
+};
+window.filtrarResHist=function(val){
+  const el=document.getElementById('tab-content');
+  if(el)el.dataset.busqRes=val;
+  const busq=val.trim().toLowerCase();
+  document.querySelectorAll('.res-hist-card').forEach(card=>{
+    const txt=(card.dataset.busqRes||'').toLowerCase();
+    const ok=!busq||txt.includes(busq);
+    card.style.display=ok?'':'none';
+    if(ok&&busq){
+      const body=card.querySelector('.res-hist-body');
+      const arrow=card.querySelector('span:last-child');
+      if(body)body.style.display='block';
+      if(arrow)arrow.textContent='▲';
+    }
+  });
+};
+
 function rtPos(el){
   const t=T();if(!t)return;const m=meta();
   const uids=partsT();const isAdmin=S.rol==='admin';
