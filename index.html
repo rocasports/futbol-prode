@@ -34,6 +34,10 @@ const auth=getAuth(app);
 let S={uid:null,rol:null,perfil:null,torneoActivo:null,data:{config:{},torneos:{}}};
 let unsubs=[];
 let pronBuffer={};
+// Estado de colapso persistente (no se resetea en re-render)
+const fechasExpandidas=new Set(); // indices fi de fechas expandidas en rtFechas
+const pronosExpandidos=new Set(); // uids expandidos en rtPronos
+let fechasExpandidasInit=false; // si ya inicializamos con la activa
 
 function dref(path){const p=path.split('/');let r=null;p.forEach((s,i)=>r=i%2===0?(r?collection(r,s):collection(db,s)):doc(r,s));return r;}
 async function fget(path){const s=await getDoc(dref(path));return s.exists()?s.data():null;}
@@ -147,7 +151,7 @@ function suscribirTorneos(){
 function renderLogin(){
   setApp(`<div class="lw"><div class="lc">
     <div class="ll">⚽</div><h1 class="lt">Prode Fútbol</h1><p class="ls">Ingresá para participar</p>
-    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v2.7</p>
+    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v2.8</p>
     <button class="btn-google" onclick="loginGoogle()"><svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 6.29C4.672 4.163 6.656 3.58 9 3.58z"/></svg>Entrar con Google</button>
     <div class="ld">o con tu mail</div>
     <input id="login-mail" class="li" type="email" placeholder="tu@mail.com"/>
@@ -241,7 +245,7 @@ function refreshTorneoView(){
   const t=T();if(!t){content.innerHTML='<div class="empty-state">Cargando...</div>';return;}
   const isAdmin=S.rol==='admin';
   const tabs=isAdmin?['participantes-t','equipos','fechas','resultados','pronosticos','pagos','premios','posiciones']:['pronosticos','resultados-hist','posiciones'];
-  const labels={'participantes-t':'Participantes','equipos':'Equipos','fechas':'Fechas','resultados':'Resultados','pronosticos':'Pronósticos','pagos':'Pagos','premios':'Premios','posiciones':'Posiciones'};
+  const labels={'participantes-t':'Participantes','equipos':'Equipos','fechas':'Fechas','resultados':'Resultados','pronosticos':'Pronósticos','pagos':'Pagos','premios':'Premios','posiciones':'Posiciones','historial':'📋 Historial','resultados-hist':'📊 Resultados'};
   const curTab=content.dataset.activeTab;
   const activeTab=tabs.includes(curTab)?curTab:(isAdmin?'participantes-t':'pronosticos');
   const m=meta();
@@ -531,8 +535,11 @@ function rtFechas(el){
   ${!fechas.length?'<p class="sub">No hay fechas aún.</p>':fechas.map((f,fi)=>{
     const lib=libres(fi);const opts=lib.map(e=>`<option>${e}</option>`).join(''); // opts usado como fallback
     const ec=ESTADO_COLOR[f.estado||'planificada'];
-    const expandida=f.estado==='activa'||f.estado==='en ejecucion';
-    return`<div class="card" style="border-left:3px solid ${ec};margin-bottom:6px">
+    const esActivaFecha=f.estado==='activa'||f.estado==='en ejecucion';
+    // Inicializar: la activa empieza abierta, el resto cerrado
+    if(!fechasExpandidasInit){if(esActivaFecha)fechasExpandidas.add(fi);}
+    const expandida=fechasExpandidas.has(fi);
+    return`<div class="card" style="border-left:3px solid ${ec};margin-bottom:6px" data-fi="${fi}">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:6px;cursor:pointer" onclick="toggleFechaCard(this)">
         <div>
           <span style="font-weight:500;font-size:13px">${f.nombre}</span>
@@ -601,9 +608,11 @@ window.toggleFechaCard=function(header){
   const body=header.parentElement.querySelector('.fecha-card-body');
   const arrow=header.querySelector('.fecha-toggle-arrow');
   if(!body)return;
+  const fi=parseInt(header.parentElement.dataset.fi||'-1');
   const abierto=body.style.display!=='none';
   body.style.display=abierto?'none':'block';
   if(arrow)arrow.textContent=abierto?'▼':'▲';
+  if(abierto)fechasExpandidas.delete(fi); else fechasExpandidas.add(fi);
 };
 
 window.addFecha=async function(){
@@ -925,13 +934,14 @@ function rtPronos(el){
         return'';
       })();
 
-      return`<div class="pron-card card" data-busq="${busqData}">
+      const pronExpandido=pronosExpandidos.has(uid);
+      return`<div class="pron-card card" data-busq="${busqData}" data-uid="${uid}">
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;cursor:pointer" onclick="togglePronCard(this)">
           <p style="font-weight:500;font-size:13px;margin:0">${nombre}${cerrado?'<span style="font-size:10px;color:var(--c-text3);margin-left:6px">🔒</span>':''}</p>
 
-          <span class="pron-arrow">▼</span>
+          <span class="pron-arrow">${pronExpandido?'▲':'▼'}</span>
         </div>
-        <div class="pron-body" style="display:none;margin-top:8px">
+        <div class="pron-body" style="display:${pronExpandido?'block':'none'};margin-top:8px">
           <div style="display:flex;justify-content:flex-end;margin-bottom:6px;gap:6px">
             ${isAdmin?`<button class="ausencia-toggle ${!ausente(fiReal,uid)?'':'ausente'}" onclick="event.stopPropagation();toggleAus(${fiReal},'${uid}')">${!ausente(fiReal,uid)?'✓ Habilitado':'⛔ No habilitado'}</button>`:''}
             ${btnGuardar}
@@ -966,9 +976,11 @@ window.togglePronCard=function(header){
   const body=card.querySelector('.pron-body');
   const arrow=header.querySelector('.pron-arrow');
   if(!body)return;
+  const uid=card.dataset.uid||'';
   const abierto=body.style.display!=='none';
   body.style.display=abierto?'none':'block';
   if(arrow)arrow.textContent=abierto?'▼':'▲';
+  if(abierto)pronosExpandidos.delete(uid); else pronosExpandidos.add(uid);
 };
 
 window.filtrarPronDom=function(val){
