@@ -152,7 +152,7 @@ function suscribirTorneos(){
 function renderLogin(){
   setApp(`<div class="lw"><div class="lc">
     <div class="ll">⚽</div><h1 class="lt">Prode Fútbol</h1><p class="ls">Ingresá para participar</p>
-    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v3.1</p>
+    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v3.2</p>
     <button class="btn-google" onclick="loginGoogle()"><svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 6.29C4.672 4.163 6.656 3.58 9 3.58z"/></svg>Entrar con Google</button>
     <div class="ld">o con tu mail</div>
     <input id="login-mail" class="li" type="email" placeholder="tu@mail.com"/>
@@ -378,9 +378,15 @@ window.crearTorneo=async function(){
   S.torneoActivo=id;renderShell();setTimeout(()=>selectTorneo(id),400);
 };
 window.eliminarTorneo=async function(){
-  if(!confirm('¿Eliminar este torneo y todos sus datos?'))return;
   const id=S.torneoActivo;
   if(!id){alert('Error: no se puede identificar el torneo.');return;}
+  // FIX 2b: verificar que no haya pronósticos en ninguna fecha
+  const td=S.data.torneos[id]||{};
+  const prons=td.pronosticos||{};
+  if(Object.keys(prons).length>0){
+    alert('No se puede eliminar esta liga porque ya hay pronósticos cargados de participantes en alguna fecha.');return;
+  }
+  if(!confirm('¿Eliminar esta liga y todos sus datos? Esta acción no se puede deshacer.'))return;
   const nuevos=torneos().filter(t=>t.id&&t.id!==id);
   await fset('config/global',{torneos:nuevos});
   S.torneoActivo=null;
@@ -677,9 +683,14 @@ window.moverF=async function(fi,dir){
 window.removeFecha=async function(fi){
   const t=T();if(!t)return;
   const f=(t.fechas||[])[fi];if(!f)return;
-  // FIX 2: no permitir borrar si no es planificada
   if(f.estado&&f.estado!=='planificada'){
     alert(`No se puede eliminar "${f.nombre}" porque está en estado "${ESTADO_LABEL[f.estado]||f.estado}". Solo se pueden eliminar fechas Planificadas.`);return;
+  }
+  // FIX 2a: verificar que no haya pronósticos de ningún participante en esta fecha
+  const prons=t.pronosticos||{};
+  const tieneProns=Object.keys(prons).some(k=>k.startsWith(`${fi}-`));
+  if(tieneProns){
+    alert(`No se puede eliminar "${f.nombre}" porque ya hay pronósticos cargados de participantes.`);return;
   }
   if(!confirm(`¿Eliminar "${f.nombre}"? Esta acción no se puede deshacer.`))return;
   const fechas=JSON.parse(JSON.stringify(t.fechas||[]));fechas.splice(fi,1);
@@ -751,6 +762,7 @@ function rtResultados(el){
   el.innerHTML=fechas.map((f,fi)=>{
     const ec=ESTADO_COLOR[f.estado||'planificada'];
     const bloqueada=f.estado==='terminada';
+    const soloLectura=f.estado!=='en ejecucion'&&f.estado!=='terminada'; // editable solo en "en ejecucion"
     const expandidaR=f.estado==='activa'||f.estado==='en ejecucion';
     return`<div class="card" style="border-left:3px solid ${ec}${bloqueada?';opacity:.85':''}">
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;cursor:pointer;padding-bottom:${expandidaR?'8':'0'}px" onclick="toggleResCard(this)">
@@ -762,7 +774,9 @@ function rtResultados(el){
         <span></span>
         ${bloqueada
           ?`<span style="font-size:11px;color:var(--c-text3)">🔒 Terminada — no editable</span>`
-          :`<button class="btn btn-sm btn-primary" onclick="guardarResultadosFecha(${fi})">💾 Guardar fecha</button>`}
+          :soloLectura
+            ?`<span style="font-size:11px;color:var(--c-text3)">Solo editable en estado En Ejecución</span>`
+            :`<button class="btn btn-sm btn-primary" onclick="guardarResultadosFecha(${fi})">💾 Guardar fecha</button>`}
       </div>
       ${!(f.partidos||[]).length?'<p class="sub">Sin partidos.</p>':(f.partidos||[]).map((p,pi)=>{
         const signo=t.resultados?.[`${fi}-${pi}-signo`]||'';const res=t.resultados?.[`${fi}-${pi}`]||{gl:'',gv:''};
@@ -774,14 +788,14 @@ function rtResultados(el){
           </div>
           ${m.sistema==='1x2'
             ?`<div class="signos">
-                <button class="signo-btn ${signo==='1'?'sel-1':''}" ${bloqueada?'disabled':''} onclick="setResS(${fi},${pi},'1')">1</button>
-                <button class="signo-btn ${signo==='X'?'sel-X':''}" ${bloqueada?'disabled':''} onclick="setResS(${fi},${pi},'X')">X</button>
-                <button class="signo-btn ${signo==='2'?'sel-2':''}" ${bloqueada?'disabled':''} onclick="setResS(${fi},${pi},'2')">2</button>
+                <button class="signo-btn ${signo==='1'?'sel-1':''}" ${bloqueada||soloLectura?'disabled':''} onclick="setResS(${fi},${pi},'1')">1</button>
+                <button class="signo-btn ${signo==='X'?'sel-X':''}" ${bloqueada||soloLectura?'disabled':''} onclick="setResS(${fi},${pi},'X')">X</button>
+                <button class="signo-btn ${signo==='2'?'sel-2':''}" ${bloqueada||soloLectura?'disabled':''} onclick="setResS(${fi},${pi},'2')">2</button>
               </div>`
             :`<div class="score-wrap">
-                <input class="score-inp" type="number" min="0" value="${res.gl}" placeholder="-" ${bloqueada?'disabled':''} onchange="setResE(${fi},${pi},'gl',this.value)"/>
+                <input class="score-inp" type="number" min="0" value="${res.gl}" placeholder="-" ${bloqueada||soloLectura?'disabled':''} onchange="setResE(${fi},${pi},'gl',this.value)"/>
                 <span style="color:#aaa">-</span>
-                <input class="score-inp" type="number" min="0" value="${res.gv}" placeholder="-" ${bloqueada?'disabled':''} onchange="setResE(${fi},${pi},'gv',this.value)"/>
+                <input class="score-inp" type="number" min="0" value="${res.gv}" placeholder="-" ${bloqueada||soloLectura?'disabled':''} onchange="setResE(${fi},${pi},'gv',this.value)"/>
               </div>${signo?`<div style="text-align:center;margin-top:4px"><span class="badge ${signo==='1'?'badge-green':signo==='X'?'badge-amber':'badge-red'}">${signo==='1'?'Local gana':signo==='X'?'Empate':'Visita gana'}</span></div>`:''}`}
         </div>`;
       }).join('')}
@@ -964,7 +978,8 @@ function rtPronos(el){
         return'';
       })();
 
-      const pronExpandido=pronosExpandidos.has(uid);
+      // Participante: siempre expandido (tiene una sola card)
+      const pronExpandido=pronosExpandidos.has(uid)||(S.rol==='participante'&&uid===S.uid);
       return`<div class="pron-card card" data-busq="${busqData}" data-uid="${uid}">
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;cursor:pointer" onclick="togglePronCard(this)">
           <p style="font-weight:500;font-size:13px;margin:0">${nombre}${cerrado?'<span style="font-size:10px;color:var(--c-text3);margin-left:6px">🔒</span>':''}</p>
