@@ -152,7 +152,7 @@ function suscribirTorneos(){
 function renderLogin(){
   setApp(`<div class="lw"><div class="lc">
     <div class="ll">⚽</div><h1 class="lt">Prode Fútbol</h1><p class="ls">Ingresá para participar</p>
-    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v3.5</p>
+    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v3.6</p>
     <button class="btn-google" onclick="loginGoogle()"><svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 6.29C4.672 4.163 6.656 3.58 9 3.58z"/></svg>Entrar con Google</button>
     <div class="ld">o con tu mail</div>
     <input id="login-mail" class="li" type="email" placeholder="tu@mail.com"/>
@@ -1413,13 +1413,32 @@ function rtPremios(el){
     <div class="row"><label class="lbl">Retiro org.:</label>
       <input id="pm-ret" type="number" min="0" max="100" value="${pctRetiro}" style="max-width:70px" ${bloqParams?'disabled':''}/>
       <span class="sub">%</span></div>
-    <div style="font-size:12px;margin:4px 0 8px;color:${totalPct===100?'var(--c-success)':'var(--c-danger)'}">
-      Total: <strong>${totalPct}%</strong> ${totalPct===100?'✅':'⚠️ Debe sumar 100%'}
+    <div style="font-size:12px;margin:4px 0 8px">
+      <span style="color:${(pct1+pct2+pct3)<=100?'var(--c-success)':'var(--c-danger)'}">
+        Premios: <strong>${pct1+pct2+pct3}%</strong> ${(pct1+pct2+pct3)<=100?'✅':'⚠️ No puede superar 100%'}
+      </span>
+      <span style="color:var(--c-text2);margin-left:12px">Retiro: <strong>${pctRetiro}%</strong> (aparte)</span>
     </div>
     <div class="row"><label class="lbl">Pozo inicial:</label>
       <input id="pm-pi" type="number" min="0" value="${pozoInicial}" style="max-width:120px" ${bloqParams?'disabled':''}/>
       <span class="sub">$ (fecha 1)</span>
       ${bloqParams?'<span style="font-size:11px;color:var(--c-text3)">🔒</span>':''}
+    </div>
+    <div style="border-top:1px solid var(--c-border);margin:10px 0;padding-top:10px">
+      <p style="font-size:12px;font-weight:500;margin-bottom:6px">Condición de aciertos por premio</p>
+      <p class="sub">Los errores permitidos por premio (0 = todos los aciertos).</p>
+      <div class="row"><label class="lbl">1° Premio:</label>
+        <input id="pm-e1" type="number" min="0" value="${c.err1??0}" style="max-width:60px" ${bloqParams?'disabled':''}/>
+        <span class="sub">errores permitidos (todas - ${c.err1??0})</span>
+      </div>
+      <div class="row"><label class="lbl">2° Premio:</label>
+        <input id="pm-e2" type="number" min="0" value="${c.err2??1}" style="max-width:60px" ${bloqParams?'disabled':''}/>
+        <span class="sub">errores permitidos (todas - ${c.err2??1})</span>
+      </div>
+      <div class="row"><label class="lbl">3° Premio:</label>
+        <input id="pm-e3" type="number" min="0" value="${c.err3??2}" style="max-width:60px" ${bloqParams?'disabled':''}/>
+        <span class="sub">errores permitidos (todas - ${c.err3??2})</span>
+      </div>
     </div>
     ${!bloqParams?`<button class="btn btn-primary btn-sm" onclick="guardarPremios()">Guardar parámetros</button>`:''}
     <p id="pm-msg" style="font-size:12px;margin-top:6px;min-height:14px"></p>
@@ -1434,9 +1453,9 @@ function rtPremios(el){
         <th>Fecha</th><th>Jugadas</th><th>Cuota</th><th>Recaudado</th>
         <th>Retiro org.</th><th>A pozo sig.</th>
         <th>Pozo Total</th>
-        <th>1° (${pct1}%)</th><th>Gan. 1°</th><th>$/gan.</th>
-        <th>2° (${pct2}%)</th><th>Gan. 2°</th><th>$/gan.</th>
-        <th>3° (${pct3}%)</th><th>Gan. 3°</th><th>$/gan.</th>
+        <th>1° (${pct1}% · ${c.err1??0} err.)</th><th>Gan. 1°</th><th>$/gan.</th>
+        <th>2° (${pct2}% · ${c.err2??1} err.)</th><th>Gan. 2°</th><th>$/gan.</th>
+        <th>3° (${pct3}% · ${c.err3??2} err.)</th><th>Gan. 3°</th><th>$/gan.</th>
         <th>Vacante total</th>
       </tr></thead>
       <tbody>${pozos.map(r=>`<tr>
@@ -1464,6 +1483,29 @@ function rtPremios(el){
       </tr>`).join('')}</tbody>
     </table>
     </div>
+  </div>
+
+  <div class="card" style="margin-top:8px">
+    <p style="font-size:13px;font-weight:500;margin-bottom:8px">👥 Ganadores por fecha</p>
+    ${pozos.filter(r=>r.calculado).map(r=>{
+      const nP=t.fechas?.[r.fi]?.partidos?.length||0;
+      const ac1=nP-(c.err1??0);const ac2=nP-(c.err2??1);const ac3=nP-(c.err3??2);
+      const mkRow=(label,aciertos,gan,monto)=>{
+        if(!gan.length)return`<p style="font-size:12px;color:var(--c-text3)">${label} (${aciertos}/${nP} ac.): vacante</p>`;
+        return`<div style="margin-bottom:6px">
+          <p style="font-size:12px;font-weight:500">${label} — ${aciertos}/${nP} aciertos — $${monto.toLocaleString()} c/u</p>
+          ${gan.map(uid=>{const p=allParts()[uid]||{};return`<div style="font-size:11px;padding:3px 8px;background:var(--c-bg2);border-radius:6px;margin-top:2px">
+            <strong>${p.nombre||''} ${p.apellido||''}</strong> · ${p.mail||''} · Cel: ${p.cel||''} · DNI: ${p.dni||''}
+          </div>`;}).join('')}
+        </div>`;
+      };
+      return`<div style="border:1px solid var(--c-border);border-radius:8px;padding:10px;margin-bottom:8px">
+        <p style="font-weight:500;margin-bottom:6px">${r.nombre}</p>
+        ${mkRow('🥇 1° Premio',ac1,r.gan1,r.mPorGan1)}
+        ${mkRow('🥈 2° Premio',ac2,r.gan2,r.mPorGan2)}
+        ${mkRow('🥉 3° Premio',ac3,r.gan3,r.mPorGan3)}
+      </div>`;
+    }).join('')||'<p class="sub">Sin fechas con resultados calculados.</p>'}
   </div>
 
   <div class="card" style="margin-top:8px;border-color:var(--c-info-border)">
@@ -1502,12 +1544,15 @@ window.guardarPremios=async function(){
   const pct3=parseFloat(document.getElementById('pm-p3')?.value)||10;
   const pctRetiro=parseFloat(document.getElementById('pm-ret')?.value)||15;
   const pozoInicial=parseFloat(document.getElementById('pm-pi')?.value)||0;
-  if(Math.round(pct1+pct2+pct3+pctRetiro)!==100){
+  if((pct1+pct2+pct3)>100){
     const msg=document.getElementById('pm-msg');
-    if(msg){msg.textContent='⚠️ Los porcentajes deben sumar exactamente 100%.';msg.style.color='var(--c-danger)';}
+    if(msg){msg.textContent='⚠️ La suma de premios no puede superar 100%.';msg.style.color='var(--c-danger)';}
     return;
   }
-  await fupd(`torneos/${S.torneoActivo}`,{premiosCfg:{pct1,pct2,pct3,pctRetiro,pozoInicial}});
+  const err1=parseInt(document.getElementById('pm-e1')?.value??'0')||0;
+  const err2=parseInt(document.getElementById('pm-e2')?.value??'1')||1;
+  const err3=parseInt(document.getElementById('pm-e3')?.value??'2')||2;
+  await fupd(`torneos/${S.torneoActivo}`,{premiosCfg:{pct1,pct2,pct3,pctRetiro,pozoInicial,err1,err2,err3}});
   const msg=document.getElementById('pm-msg');
   if(msg){msg.textContent='✅ Guardado';msg.style.color='var(--c-success)';setTimeout(()=>{if(msg)msg.textContent='';},2000);}
 };
@@ -1528,13 +1573,16 @@ window.generarTextoPub=function(){
   const pozos=tabEl?._pozos||[];
   const r=pozos.find(p=>p.fi===fi);
   if(!r||!r.calculado){document.getElementById('pub-texto').value='';return;}
+  const t2=T();const cfg2=t2?.premiosCfg||{};
+  const nP=t2?.fechas?.[fi]?.partidos?.length||0;
+  const ac1=nP-(cfg2.err1??0); const ac2=nP-(cfg2.err2??1); const ac3=nP-(cfg2.err3??2);
   const lineas=[
     `📊 Resultados ${r.nombre}`,
     `Pozo total: $${r.pozoTotal.toLocaleString()}`,
     ``,
-    `🥇 1° Premio ($${r.montoP1.toLocaleString()}): ${r.gan1.length?r.gan1.length+' ganador'+( r.gan1.length>1?'es':'')+' → $'+r.mPorGan1.toLocaleString()+' c/u':'VACANTE'}`,
-    `🥈 2° Premio ($${r.montoP2.toLocaleString()}): ${r.gan2.length?r.gan2.length+' ganador'+(r.gan2.length>1?'es':'')+' → $'+r.mPorGan2.toLocaleString()+' c/u':'VACANTE'}`,
-    `🥉 3° Premio ($${r.montoP3.toLocaleString()}): ${r.gan3.length?r.gan3.length+' ganador'+(r.gan3.length>1?'es':'')+' → $'+r.mPorGan3.toLocaleString()+' c/u':'VACANTE'}`,
+    `🥇 1° Premio — ${ac1}/${nP} aciertos — $${r.montoP1.toLocaleString()}: ${r.gan1.length?r.gan1.length+' ganador'+(r.gan1.length>1?'es':'')+' → $'+r.mPorGan1.toLocaleString()+' c/u':'VACANTE'}`,
+    `🥈 2° Premio — ${ac2}/${nP} aciertos — $${r.montoP2.toLocaleString()}: ${r.gan2.length?r.gan2.length+' ganador'+(r.gan2.length>1?'es':'')+' → $'+r.mPorGan2.toLocaleString()+' c/u':'VACANTE'}`,
+    `🥉 3° Premio — ${ac3}/${nP} aciertos — $${r.montoP3.toLocaleString()}: ${r.gan3.length?r.gan3.length+' ganador'+(r.gan3.length>1?'es':'')+' → $'+r.mPorGan3.toLocaleString()+' c/u':'VACANTE'}`,
     ``,
     `Vacante acumulado para próxima fecha: $${(r.totalVacante||0).toLocaleString()}`,
   ];
@@ -1641,10 +1689,16 @@ function rtResultadosHist(el){
       <div style="margin-top:10px">
         <p style="font-size:12px;font-weight:500;margin-bottom:6px">🏆 Premios de esta fecha</p>
         <table style="width:100%;font-size:12px"><thead><tr><th>Premio</th><th>Pozo</th><th>Ganadores</th><th>$ por ganador</th></tr></thead>
-        <tbody>
-          <tr><td>1°</td><td>$${pozo.montoP1.toLocaleString()}</td><td>${pozo.gan1.length||'<span style="color:var(--c-warn)">vacante</span>'}</td><td>${pozo.gan1.length?'$'+pozo.mPorGan1.toLocaleString():'—'}</td></tr>
-          <tr><td>2°</td><td>$${pozo.montoP2.toLocaleString()}</td><td>${pozo.gan2.length||'<span style="color:var(--c-warn)">vacante</span>'}</td><td>${pozo.gan2.length?'$'+pozo.mPorGan2.toLocaleString():'—'}</td></tr>
-          <tr><td>3°</td><td>$${pozo.montoP3.toLocaleString()}</td><td>${pozo.gan3.length||'<span style="color:var(--c-warn)">vacante</span>'}</td><td>${pozo.gan3.length?'$'+pozo.mPorGan3.toLocaleString():'—'}</td></tr>
+        <tbody>${(()=>{
+          const nPH=f.partidos?.length||0;
+          const cfgTmp=t.premiosCfg||{};
+          const rows=[
+            {label:'🥇 1°',ac:nPH-(cfgTmp.err1??0),monto:pozo.montoP1,gan:pozo.gan1,mpg:pozo.mPorGan1},
+            {label:'🥈 2°',ac:nPH-(cfgT.err2??1),monto:pozo.montoP2,gan:pozo.gan2,mpg:pozo.mPorGan2},
+            {label:'🥉 3°',ac:nPH-(cfgT.err3??2),monto:pozo.montoP3,gan:pozo.gan3,mpg:pozo.mPorGan3},
+          ];
+          return rows.map(r=>`<tr><td>${r.label} (${r.ac}/${nPH} ac.)</td><td>$${r.monto.toLocaleString()}</td><td>${r.gan.length||'<span style="color:var(--c-warn)">vacante</span>'}</td><td>${r.gan.length?'$'+r.mpg.toLocaleString():'—'}</td></tr>`).join('');
+        })()}
         </tbody></table>
       </div>`:'';
     const premios=t.resultadosPublicados?.[fi]||{};
@@ -1653,12 +1707,23 @@ function rtResultadosHist(el){
       <p style="white-space:pre-line">${premios.texto}</p>
     </div>`:'';
 
-    return`<div class="card res-hist-card" data-busq-res="${(f.nombre||'')+' '+(f.numero||'')}">
-      <div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="toggleResHistCard(this)">
+    // Verificar si ganó algún premio en esta fecha (reusar pozosData ya calculado)
+    const pozoFecha=pozosData.find(p=>p.fi===fi);
+    const gano1=pozoFecha?.gan1?.includes(uid);
+    const gano2=pozoFecha?.gan2?.includes(uid);
+    const gano3=pozoFecha?.gan3?.includes(uid);
+    const gano=gano1||gano2||gano3;
+    const premioLabel=gano1?'🥇 1° Premio':gano2?'🥈 2° Premio':gano3?'🥉 3° Premio':'';
+    const borderColor=gano?'var(--c-warn)':'var(--c-border)';
+    const bgHeader=gano?'background:var(--c-warn-bg)':'';
+
+    return`<div class="card res-hist-card" data-busq-res="${(f.nombre||'')+' '+(f.numero||'')}"      style="border-color:${borderColor}">
+      <div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;${bgHeader};padding:8px;margin:-14px -14px 0;border-radius:9px 9px 0 0" onclick="toggleResHistCard(this)">
         <div>
           <span style="font-weight:500;font-size:13px">${f.nombre}</span>
           ${f.numero?`<span style="font-size:11px;color:var(--c-text2);margin-left:6px">Nº${f.numero}</span>`:''}
           ${hayPts?`<span style="font-size:12px;margin-left:8px" class="badge badge-green">${ptsTotales} pts</span>`:''}
+          ${gano?`<span style="font-size:12px;margin-left:8px;font-weight:600;color:var(--c-warn)">${premioLabel}</span>`:''}
         </div>
         <span>${esUltima?'▲':'▼'}</span>
       </div>
@@ -1785,11 +1850,12 @@ function calcPozos(t, c){
       return{uid,errores:nP-ac};
     });
 
-    const gan1=scores.filter(s=>s.errores===0).map(s=>s.uid);
-    const noG1=scores.filter(s=>s.errores!==0);
-    const gan2=noG1.filter(s=>s.errores===1).map(s=>s.uid);
-    const noG12=noG1.filter(s=>s.errores!==1);
-    const gan3=noG12.filter(s=>s.errores===2).map(s=>s.uid);
+    const e1=c.err1??0; const e2=c.err2??1; const e3=c.err3??2;
+    const gan1=scores.filter(s=>s.errores===e1).map(s=>s.uid);
+    const noG1=scores.filter(s=>s.errores!==e1);
+    const gan2=noG1.filter(s=>s.errores===e2).map(s=>s.uid);
+    const noG12=noG1.filter(s=>s.errores!==e2);
+    const gan3=noG12.filter(s=>s.errores===e3).map(s=>s.uid);
 
     const mPorGan1=gan1.length?Math.round(montoP1/gan1.length):0;
     const mPorGan2=gan2.length?Math.round(montoP2/gan2.length):0;
@@ -1904,3 +1970,4 @@ code{background:var(--c-bg2);padding:2px 6px;border-radius:4px;font-size:11px;bo
 </style>
 <body><div id="app"></div></body>
 </html>
+
