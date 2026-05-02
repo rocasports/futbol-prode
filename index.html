@@ -152,7 +152,7 @@ function suscribirTorneos(){
 function renderLogin(){
   setApp(`<div class="lw"><div class="lc">
     <div class="ll">⚽</div><h1 class="lt">Prode Fútbol</h1><p class="ls">Ingresá para participar</p>
-    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v4.0</p>
+    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v4.1</p>
     <button class="btn-google" onclick="loginGoogle()"><svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 6.29C4.672 4.163 6.656 3.58 9 3.58z"/></svg>Entrar con Google</button>
     <div class="ld">o con tu mail</div>
     <input id="login-mail" class="li" type="email" placeholder="tu@mail.com"/>
@@ -253,7 +253,7 @@ function refreshTorneoView(){
   const content=document.getElementById('content');if(!content||!S.torneoActivo)return;
   const t=T();if(!t){content.innerHTML='<div class="empty-state">Cargando...</div>';return;}
   const isAdmin=S.rol==='admin';
-  const tabs=isAdmin?['participantes-t','equipos','fechas','resultados','pronosticos','pagos','premios','posiciones']:['pronosticos','resultados-hist'];
+  const tabs=isAdmin?['participantes-t','equipos','fechas','pronosticos','resultados','pagos','premios','posiciones']:['pronosticos','resultados-hist'];
   const labels={'participantes-t':'Participantes','equipos':'Equipos','fechas':'Fechas','resultados':'Resultados','pronosticos':'Pronósticos','pagos':'Pagos','premios':'Premios','posiciones':'Posiciones','resultados-hist':'📊 Resultados'};
   const curTab=content.dataset.activeTab;
   const activeTab=tabs.includes(curTab)?curTab:(isAdmin?'participantes-t':'pronosticos');
@@ -551,12 +551,14 @@ window.guardarEditFecha=async function(fi){
   const inicio=document.getElementById('edit-inicio-'+fi)?.value;
   if(!nombre)return alert('El nombre es obligatorio');
   if(!numero)return alert('El número es obligatorio');
+  const nroJugadaEdit=document.getElementById('edit-jugada-'+fi)?.value;
   // Validar unicidad (excluyendo la fecha actual)
   const fechas=t.fechas||[];
   if(fechas.some((f,i)=>i!==fi&&String(f.numero)===String(numero)))return alert(`Ya existe la fecha número ${numero}`);
   if(fechas.some((f,i)=>i!==fi&&f.nombre.toLowerCase()===nombre.toLowerCase()))return alert('Ya existe una fecha con ese nombre');
+  if(nroJugadaEdit&&fechas.some((f,i)=>i!==fi&&String(f.nroJugada)===String(nroJugadaEdit)))return alert(`Ya existe la Jugada N° ${nroJugadaEdit}`);
   const nuevas=JSON.parse(JSON.stringify(fechas));
-  nuevas[fi]={...nuevas[fi],nombre,numero:parseInt(numero),inicio:inicio||null};
+  nuevas[fi]={...nuevas[fi],nombre,numero:parseInt(numero),nroJugada:nroJugadaEdit?parseInt(nroJugadaEdit):null,inicio:inicio||null};
   await fupd(`torneos/${S.torneoActivo}`,{fechas:nuevas});
   editandoFecha=-1;
 };
@@ -565,7 +567,14 @@ function rtFechas(el){
   const t=T();if(!t)return;const fechas=t.fechas||[];
   el.innerHTML=`<div class="card">
     <p style="font-size:13px;font-weight:500;margin-bottom:8px">Nueva fecha</p>
-    <div class="row"><label class="lbl">N° fecha:</label><input id="f-num" type="number" min="1" placeholder="Ej: 1" style="max-width:70px" value="${(()=>{const ns=(T()?.fechas||[]).map(f=>f.numero||0);return ns.length?Math.max(...ns)+1:1;})()}"/><label class="lbl" style="min-width:auto;margin-left:4px">Nombre:</label><input id="f-nombre" placeholder="Nombre de la fecha *"/></div>
+    <div class="row">
+      <label class="lbl">N° fecha:</label>
+      <input id="f-num" type="number" min="1" placeholder="Ej: 1" style="max-width:70px" value="${(()=>{const ns=(T()?.fechas||[]).map(f=>f.numero||0);return ns.length?Math.max(...ns)+1:1;})()}"/>
+      <label class="lbl" style="min-width:auto;margin-left:8px">Jugada N°:</label>
+      <input id="f-jugada" type="number" min="1" placeholder="Ej: 847" style="max-width:80px" value="${(()=>{const js=(T()?.fechas||[]).map(f=>f.nroJugada||0).filter(n=>n>0);return js.length?Math.max(...js)+1:'';})()}"/>
+      <label class="lbl" style="min-width:auto;margin-left:8px">Nombre:</label>
+      <input id="f-nombre" placeholder="Nombre de la fecha *"/>
+    </div>
     <div class="row"><label class="lbl">Inicio:</label><input id="f-inicio" type="date" style="max-width:160px"/><span style="font-size:11px;color:var(--c-text2)">(opcional)</span></div>
     <button class="btn btn-primary btn-sm" onclick="addFecha()">Crear fecha</button>
     <p id="fecha-msg" style="font-size:12px;margin-top:6px;min-height:16px"></p>
@@ -587,6 +596,7 @@ function rtFechas(el){
         <div>
           <span style="font-weight:500;font-size:13px">${f.nombre}</span>
           ${f.numero?`<span style="font-size:11px;color:var(--c-text2);margin-left:6px">Nº${f.numero}</span>`:''}
+          ${f.nroJugada?`<span style="font-size:11px;font-weight:600;color:var(--c-info);margin-left:6px">Jugada ${f.nroJugada}</span>`:''}
           <span style="font-size:11px;margin-left:6px;color:${ec}">${ESTADO_LABEL[f.estado||'planificada']}</span>
           ${f.inicio?`<span style="font-size:11px;color:var(--c-text2);margin-left:6px">📅 ${f.inicio}</span>`:''}
         </div>
@@ -599,6 +609,7 @@ function rtFechas(el){
             <div style="display:flex;flex-direction:column;gap:6px">
               <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
                 <input id="edit-num-${fi}" type="number" min="1" value="${f.numero||''}" style="width:60px;padding:4px 6px;font-size:12px;border:1px solid var(--c-border);border-radius:6px;background:var(--c-bg);color:var(--c-text)" placeholder="N°"/>
+                <input id="edit-jugada-${fi}" type="number" min="1" value="${f.nroJugada||''}" style="width:75px;padding:4px 6px;font-size:12px;border:1px solid var(--c-border);border-radius:6px;background:var(--c-bg);color:var(--c-text)" placeholder="Jugada#"/>
                 <input id="edit-nombre-${fi}" value="${f.nombre}" style="flex:1;min-width:120px;padding:4px 8px;font-size:13px;border:1px solid var(--c-border);border-radius:6px;background:var(--c-bg);color:var(--c-text)" placeholder="Nombre"/>
               </div>
               <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
@@ -660,10 +671,12 @@ window.toggleFechaCard=function(header){
 
 window.addFecha=async function(){
   const nombre=v('f-nombre');const numero=v('f-num');const inicio=v('f-inicio');
+  const nroJugadaStr=v('f-jugada');
   if(!nombre)return emsg('fecha-msg','El nombre es obligatorio');
   if(!numero)return emsg('fecha-msg','El número de fecha es obligatorio');
   const t=T();if(!t)return;const fechas=t.fechas||[];
   if(fechas.find(f=>String(f.numero)===String(numero)))return emsg('fecha-msg',`Ya existe la fecha número ${numero}`);
+  if(nroJugadaStr&&fechas.find(f=>String(f.nroJugada)===String(nroJugadaStr)))return emsg('fecha-msg',`Ya existe la Jugada N° ${nroJugadaStr}`);
   if(fechas.find(f=>f.nombre.toLowerCase()===nombre.toLowerCase()))return emsg('fecha-msg','Ya existe una fecha con ese nombre');
   await fupd(`torneos/${S.torneoActivo}`,{fechas:[{nombre,numero:parseInt(numero),inicio:inicio||null,partidos:[],estado:'planificada'},...fechas]});
   document.getElementById('f-nombre').value='';document.getElementById('f-num').value='';document.getElementById('f-inicio').value='';
@@ -792,7 +805,7 @@ function rtResultados(el){
     const expandidaR=f.estado==='activa'||f.estado==='en ejecucion';
     return`<div class="card" style="border-left:3px solid ${ec}${bloqueada?';opacity:.85':''}">
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;cursor:pointer;padding-bottom:${expandidaR?'8':'0'}px" onclick="toggleResCard(this)">
-        <p style="font-weight:500;font-size:13px;margin:0">${f.nombre} <span style="font-size:11px;color:${ec}">${ESTADO_LABEL[f.estado||'planificada']}</span></p>
+        <p style="font-weight:500;font-size:13px;margin:0">${f.nombre}${f.nroJugada?` <span style="font-size:11px;font-weight:600;color:var(--c-info)">Jugada ${f.nroJugada}</span>`:''} <span style="font-size:11px;color:${ec}">${ESTADO_LABEL[f.estado||'planificada']}</span></p>
         <span>${expandidaR?'▲':'▼'}</span>
       </div>
       <div style="display:${expandidaR?'block':'none'}">
@@ -945,7 +958,8 @@ function rtPronos(el){
     else if(esSelec){bg='var(--c-info)';clr='#fff';bord='var(--c-info)';}
     else if(esActiva){bg='';clr='var(--c-success)';bord='var(--c-success)';}
     const icono=esActiva&&!esSelec?(f.estado==='en ejecucion'?' ⚽':' 🟢'):'';
-    return`<button class="btn btn-sm" onclick="cambiarFP(${i})" style="background:${bg};color:${clr||'inherit'};border-color:${bord||'var(--c-border)'}">${f.nombre}${icono}</button>`;
+    const jBadge=f.nroJugada?` <span style="font-size:10px;opacity:.85;font-weight:500">J${f.nroJugada}</span>`:'';
+    return`<button class="btn btn-sm" onclick="cambiarFP(${i})" style="background:${bg};color:${clr||'inherit'};border-color:${bord||'var(--c-border)'}">${f.nombre}${jBadge}${icono}</button>`;
   }).join('');
 
   const habilitadosEnFecha=uids.filter(uid=>!ausente(fiReal,uid));
@@ -1151,6 +1165,12 @@ window.guardarPron=async function(fi,uid){
     const cerrados=JSON.parse(JSON.stringify(t.pronosticosCerrados||{}));
     cerrados[`${fi}-${uid}`]=true;
     updates.pronosticosCerrados=cerrados;
+    // Registro de auditoría
+    const ua=navigator.userAgent;
+    const isMobile=/Mobi|Android|iPhone|iPad/i.test(ua);
+    const registros=JSON.parse(JSON.stringify(t.registrosPron||{}));
+    registros[`${fi}-${uid}`]={ts:new Date().toISOString(),dispositivo:isMobile?'Mobile':'PC',ua:ua.substring(0,200)};
+    updates.registrosPron=registros;
   }
   await fupd(`torneos/${S.torneoActivo}`,updates);
   const el=document.getElementById(`smsg-${uid.slice(-6)}`);
@@ -1647,7 +1667,9 @@ function rtResultadosHist(el){
   const t=T();if(!t)return;const m=meta();
   const uid=S.uid;
   // Solo fechas terminadas con resultados publicados
-  const fechas=(t.fechas||[]).filter(f=>f.estado==='terminada'&&t.resultadosPublicados?.[t.fechas.indexOf(f)]);
+  const todasFechas=t.fechas||[];
+  // Mostrar fechas terminadas o en ejecucion donde el participante estuvo habilitado
+  const fechas=todasFechas.filter(f=>{const fi=todasFechas.indexOf(f);return (f.estado==='terminada'||f.estado==='en ejecucion')&&!ausente(fi,uid);});
   if(!fechas.length){
     el.innerHTML='<p class="sub" style="margin-top:8px">Todavía no hay fechas con resultados publicados.</p>';
     return;
@@ -1669,10 +1691,11 @@ function rtResultadosHist(el){
     const haJugado=!ausente(fi,uid);
     // Puntos del participante en esta fecha
     let ptsTotales=0;let hayPts=false;
+    const publicado=!!(t.resultadosPublicados?.[fi]);
     const partidos=(f.partidos||[]).map((p,pi)=>{
-      const rs=t.resultados?.[`${fi}-${pi}-signo`]||'';
+      const rs=publicado?(t.resultados?.[`${fi}-${pi}-signo`]||''):'';
       const ps=t.pronosticos?.[`${fi}-${pi}-${uid}-signo`]||'';
-      const res=t.resultados?.[`${fi}-${pi}`]||{};
+      const res=publicado?(t.resultados?.[`${fi}-${pi}`]||{}):{gl:'',gv:''};
       const pron=t.pronosticos?.[`${fi}-${pi}-${uid}`]||{};
       let pts=null;
       if(rs&&ps){
@@ -1698,7 +1721,7 @@ function rtResultadosHist(el){
         <div style="display:flex;justify-content:space-around;margin-top:6px;gap:8px;font-size:12px">
           <div style="text-align:center">
             <div style="color:var(--c-text3);font-size:10px">Resultado</div>
-            <div style="font-weight:500">${m.sistema==='1x2'?(rs?`<span class="badge ${rs==='1'?'badge-green':rs==='X'?'badge-amber':'badge-red'}">${rs==='1'?'Local':rs==='X'?'Empate':'Visita'}</span>`:'—'):(res.gl!==''&&res.gl!==undefined?res.gl+'-'+res.gv:'—')}</div>
+            <div style="font-weight:500">${publicado?(m.sistema==='1x2'?(rs?`<span class="badge ${rs==='1'?'badge-green':rs==='X'?'badge-amber':'badge-red'}">${rs==='1'?'Local':rs==='X'?'Empate':'Visita'}</span>`:'—'):(res.gl!==''&&res.gl!==undefined?res.gl+'-'+res.gv:'—')):'<span style="color:var(--c-text3)">—</span>'}</div>
           </div>
           ${haJugado?`<div style="text-align:center">
             <div style="color:var(--c-text3);font-size:10px">Tu pronóstico</div>
@@ -1733,8 +1756,8 @@ function rtResultadosHist(el){
         })()}
         </tbody></table>
       </div>`:'';
-    const premios=t.resultadosPublicados?.[fi]||{};
-    const premiosHTML=(premios.texto||premiosAutoHTML)?`<div style="background:var(--c-success-bg);border:1px solid var(--c-success-border);border-radius:8px;padding:10px;margin-top:8px;font-size:12px">
+    const premios=publicado?(t.resultadosPublicados?.[fi]||{}):{};const noPublicadoMsg=!publicado?'<p style="font-size:12px;color:var(--c-text3);margin-top:6px">⏳ Resultados y premios disponibles cuando el administrador los publique.</p>':'';
+    const premiosHTML=publicado&&(premios.texto||premiosAutoHTML)?`<div style="background:var(--c-success-bg);border:1px solid var(--c-success-border);border-radius:8px;padding:10px;margin-top:8px;font-size:12px">
       <p style="font-weight:500;color:var(--c-success);margin-bottom:4px">🏆 Premios</p>
       <p style="white-space:pre-line">${premios.texto}</p>
     </div>`:'';
@@ -1761,7 +1784,7 @@ function rtResultadosHist(el){
       </div>
       <div class="res-hist-body" style="display:${esUltima?'block':'none'};margin-top:8px">
         ${!haJugado?'<p class="sub">No participaste en esta fecha.</p>':partidos}
-        ${premiosHTML}
+        ${premiosHTML}${noPublicadoMsg}
       </div>
     </div>`;
   }).join('')}
