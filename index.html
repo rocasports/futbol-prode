@@ -35,6 +35,15 @@ let S={uid:null,rol:null,perfil:null,torneoActivo:null,data:{config:{},torneos:{
 let unsubs=[];
 let pronBuffer={};
 function nJugadas(fi,uid){return T()?.jugadas?.[`${fi}-${uid}`]||1;}
+// Habilitación POR JUGADA: aus["fi-uid-jIdx"] === false → habilitado
+// Si no existe la clave específica de jugada, usa la habilitación general del participante
+function jugadaHabilitada(fi,uid,jIdx){
+  const aus=T()?.ausencias||{};
+  const kJ=`${fi}-${uid}-${jIdx}`;
+  if(kJ in aus) return aus[kJ]===false;
+  // Fallback: usa la habilitación general (fi-uid)
+  return !ausente(fi,uid);
+}
 let pronFechaIdx=0; // índice de la fecha seleccionada en pronósticos
 // Estado de colapso persistente (no se resetea en re-render)
 const fechasExpandidas=new Set(); // indices fi de fechas expandidas en rtFechas
@@ -153,7 +162,7 @@ function suscribirTorneos(){
 function renderLogin(){
   setApp(`<div class="lw"><div class="lc">
     <div class="ll">⚽</div><h1 class="lt">Prode Fútbol</h1><p class="ls">Ingresá para participar</p>
-    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v4.1</p>
+    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v4.2</p>
     <button class="btn-google" onclick="loginGoogle()"><svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 6.29C4.672 4.163 6.656 3.58 9 3.58z"/></svg>Entrar con Google</button>
     <div class="ld">o con tu mail</div>
     <input id="login-mail" class="li" type="email" placeholder="tu@mail.com"/>
@@ -1032,17 +1041,21 @@ function rtPronos(el){
         </div>
         <div class="pron-body" style="display:${pronExpandido?'block':'none'};margin-top:8px">
           <div style="display:flex;justify-content:flex-end;margin-bottom:6px;gap:6px;flex-wrap:wrap">
-            ${isAdmin?`<button class="ausencia-toggle ${!ausente(fiReal,uid)?'':'ausente'}" onclick="event.stopPropagation();toggleAus(${fiReal},'${uid}')">${!ausente(fiReal,uid)?'✓ Habilitado':'⛔ No habilitado'}</button>`:''}
-            ${isAdmin&&!ausente(fiReal,uid)?`<button class="btn btn-sm" onclick="event.stopPropagation();agregarJugada(${fiReal},'${uid}')" title="Agregar jugada adicional">+ Jugada</button>`:''}
-            ${isAdmin&&nJug>1?`<button class="btn btn-sm btn-danger" style="padding:3px 8px" onclick="event.stopPropagation();quitarJugada(${fiReal},'${uid}')" title="Quitar última jugada">− Jugada</button>`:''}
+            ${isAdmin?`
+            <button class="btn btn-sm" onclick="event.stopPropagation();agregarJugada(${fiReal},'${uid}')" title="Agregar jugada">+ Jugada</button>
+            ${nJug>1?`<button class="btn btn-sm btn-danger" style="padding:3px 8px" onclick="event.stopPropagation();quitarJugada(${fiReal},'${uid}')" title="Quitar última jugada">− Jugada</button>`:''}
+          `:''}
           </div>
           ${todasJugadas.map(({jIdx,bloques:blqJ,editableJ,cerradaJ})=>`
             <div style="margin-bottom:${nJug>1?'10':'0'}px${nJug>1?';border:1px solid var(--c-border);border-radius:8px;padding:8px;background:var(--c-bg2)':''}">
-              ${nJug>1?`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-                <span style="font-size:11px;font-weight:500;color:var(--c-info)">Jugada ${jIdx+1}</span>
-                ${!isAdmin&&cerradaJ?'<span style="font-size:11px;color:var(--c-text3)">🔒 Cerrada</span>':
-                  editableJ?`<button class="btn btn-sm btn-primary" onclick="event.stopPropagation();guardarPron(${fiReal},'${uid}',${jIdx})">💾 Guardar jugada ${jIdx+1}</button>`:''}
-              </div>`:''}
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+                <span style="font-size:11px;font-weight:500;color:var(--c-info)">${nJug>1?`Jugada ${jIdx+1}`:''}</span>
+                <div style="display:flex;gap:6px;align-items:center">
+                  ${isAdmin?`<button class="ausencia-toggle ${jugadaHabilitada(fiReal,uid,jIdx)?'':'ausente'}" onclick="event.stopPropagation();toggleJugada(${fiReal},'${uid}',${jIdx})">${jugadaHabilitada(fiReal,uid,jIdx)?'✓ Habilitada':'⛔ No habilitada'}</button>`:''}
+                  ${!isAdmin&&cerradaJ?'<span style="font-size:11px;color:var(--c-text3)">🔒 Cerrada</span>':
+                    editableJ&&jugadaHabilitada(fiReal,uid,jIdx)?`<button class="btn btn-sm btn-primary" onclick="event.stopPropagation();guardarPron(${fiReal},'${uid}',${jIdx})">💾 Guardar jugada ${jIdx+1}</button>`:''}
+                </div>
+              </div>
               ${blqJ}
               ${nJug===1&&!isAdmin&&!cerradaJ&&editableJ?`<div style="text-align:right;margin-top:6px">${btnGuardar}</div>`:''}
               ${nJug===1&&!isAdmin&&cerradaJ?`<div style="text-align:right;margin-top:6px"><span style="font-size:11px;color:var(--c-text3)">🔒 Pronóstico cerrado</span></div>`:''}
@@ -1111,6 +1124,19 @@ window.filtrarPronos=function(val){
   if(listaEl) renderPronLista(listaEl,null,null,null,null,null,null,val);
   else renderTab('pronosticos');
 };
+window.toggleJugada=async function(fi,uid,jIdx){
+  const t=T();if(!t)return;
+  const f=(t.fechas||[])[fi];
+  if(f&&(f.estado==='en ejecucion'||f.estado==='terminada')){
+    alert(`No se puede cambiar la habilitación en una fecha "${ESTADO_LABEL[f.estado]}".`);return;
+  }
+  const aus=JSON.parse(JSON.stringify(t.ausencias||{}));
+  const kJ=`${fi}-${uid}-${jIdx}`;
+  const habilitada=jugadaHabilitada(fi,uid,jIdx);
+  aus[kJ]=habilitada; // si estaba habilitada → marcar como ausente (true), si no → false
+  await fupd(`torneos/${S.torneoActivo}`,{ausencias:aus});
+};
+
 window.agregarJugada=async function(fi,uid){
   const t=T();if(!t)return;
   const actual=nJugadas(fi,uid);
@@ -1209,6 +1235,19 @@ window.cambiarFP=function(fi){
   el.dataset.fi=String(fi);
   renderTab('pronosticos');
 };
+window.toggleJugada=async function(fi,uid,jIdx){
+  const t=T();if(!t)return;
+  const f=(t.fechas||[])[fi];
+  if(f&&(f.estado==='en ejecucion'||f.estado==='terminada')){
+    alert(`No se puede cambiar la habilitación en una fecha "${ESTADO_LABEL[f.estado]}".`);return;
+  }
+  const aus=JSON.parse(JSON.stringify(t.ausencias||{}));
+  const kJ=`${fi}-${uid}-${jIdx}`;
+  const habilitada=jugadaHabilitada(fi,uid,jIdx);
+  aus[kJ]=habilitada; // si estaba habilitada → marcar como ausente (true), si no → false
+  await fupd(`torneos/${S.torneoActivo}`,{ausencias:aus});
+};
+
 window.agregarJugada=async function(fi,uid){
   const t=T();if(!t)return;
   const actual=nJugadas(fi,uid);
@@ -1583,8 +1622,8 @@ function rtPremios(el){
         if(!gan.length)return`<p style="font-size:12px;color:var(--c-text3)">${label} (${aciertos}/${nP} ac.): vacante</p>`;
         return`<div style="margin-bottom:6px">
           <p style="font-size:12px;font-weight:500">${label} — ${aciertos}/${nP} aciertos — $${monto.toLocaleString()} c/u</p>
-          ${gan.map(uid=>{const p=allParts()[uid]||{};return`<div style="font-size:11px;padding:3px 8px;background:var(--c-bg2);border-radius:6px;margin-top:2px">
-            <strong>${p.nombre||''} ${p.apellido||''}</strong> · ${p.mail||''} · Cel: ${p.cel||''} · DNI: ${p.dni||''}
+          ${gan.map(key=>{const [uid,jIdx]=key.split('#');const p=allParts()[uid]||{};const nJ=t.jugadas?.[`${r.fi}-${uid}`]||1;return`<div style="font-size:11px;padding:3px 8px;background:var(--c-bg2);border-radius:6px;margin-top:2px">
+            <strong>${p.nombre||''} ${p.apellido||''}</strong>${nJ>1?` (Jugada ${parseInt(jIdx)+1})`:''} · ${p.mail||''} · Cel: ${p.cel||''} · DNI: ${p.dni||''}
           </div>`;}).join('')}
         </div>`;
       };
@@ -1923,7 +1962,19 @@ function calcPozos(t, c){
   fechas.forEach((f,fi)=>{
     const activos=(t.participantes||[]).filter(uid=>!ausente(fi,uid));
     const cuota=(t.cuotasFecha?.[fi]??t.cuota??500);
-    const totalJugadas=activos.length;
+    // Contar jugadas habilitadas (cada participante puede tener N)
+    let totalJugadas=0;
+    activos.forEach(uid=>{
+      const nJ=t.jugadas?.[`${fi}-${uid}`]||1;
+      const aus=t.ausencias||{};
+      for(let jIdx=0;jIdx<nJ;jIdx++){
+        const kJ=`${fi}-${uid}-${jIdx}`;
+        let habilitada;
+        if(kJ in aus) habilitada=aus[kJ]===false;
+        else habilitada=!(aus[`${fi}-${uid}`]!==false);
+        if(habilitada)totalJugadas++;
+      }
+    });
     const recaudado=totalJugadas*cuota;
     const retiroMonto=Math.round(recaudado*pctRetiro);
     const aPozo=recaudado-retiroMonto; // lo que va al pozo de ESTA fecha -> para la SIGUIENTE
@@ -1949,24 +2000,38 @@ function calcPozos(t, c){
       return;
     }
 
-    // Calcular aciertos
+    // Calcular aciertos POR JUGADA (uid-jIdx)
     const nP=f.partidos.length;
-    const scores=activos.map(uid=>{
-      let ac=0;
-      f.partidos.forEach((_,pi)=>{
-        const rs=t.resultados?.[`${fi}-${pi}-signo`]||'';
-        const ps=t.pronosticos?.[`${fi}-${pi}-${uid}-signo`]||'';
-        if(rs&&ps===rs)ac++;
-      });
-      return{uid,errores:nP-ac};
+    const e1=c.err1??0; const e2=c.err2??1; const e3=c.err3??2;
+    // Expandir: cada participante puede tener N jugadas habilitadas
+    const jugadasActivas=[];
+    activos.forEach(uid=>{
+      const nJ=t.jugadas?.[`${fi}-${uid}`]||1;
+      for(let jIdx=0;jIdx<nJ;jIdx++){
+        // Verificar habilitación por jugada
+        const aus=t.ausencias||{};
+        const kJ=`${fi}-${uid}-${jIdx}`;
+        let habilitada;
+        if(kJ in aus) habilitada=aus[kJ]===false;
+        else habilitada=!(aus[`${fi}-${uid}`]!==false); // fallback general
+        if(!habilitada)continue;
+        let ac=0;
+        f.partidos.forEach((_,pi)=>{
+          const rs=t.resultados?.[`${fi}-${pi}-signo`]||'';
+          // Intentar clave indexada, sino legacy (jIdx===0)
+          let ps=t.pronosticos?.[`${fi}-${pi}-${uid}-${jIdx}-signo`]||'';
+          if(!ps&&jIdx===0)ps=t.pronosticos?.[`${fi}-${pi}-${uid}-signo`]||'';
+          if(rs&&ps===rs)ac++;
+        });
+        jugadasActivas.push({uid,jIdx,errores:nP-ac,key:`${uid}#${jIdx}`});
+      }
     });
 
-    const e1=c.err1??0; const e2=c.err2??1; const e3=c.err3??2;
-    const gan1=scores.filter(s=>s.errores===e1).map(s=>s.uid);
-    const noG1=scores.filter(s=>s.errores!==e1);
-    const gan2=noG1.filter(s=>s.errores===e2).map(s=>s.uid);
+    const gan1=jugadasActivas.filter(s=>s.errores===e1).map(s=>s.key);
+    const noG1=jugadasActivas.filter(s=>s.errores!==e1);
+    const gan2=noG1.filter(s=>s.errores===e2).map(s=>s.key);
     const noG12=noG1.filter(s=>s.errores!==e2);
-    const gan3=noG12.filter(s=>s.errores===e3).map(s=>s.uid);
+    const gan3=noG12.filter(s=>s.errores===e3).map(s=>s.key);
 
     const mPorGan1=gan1.length?Math.round(montoP1/gan1.length):0;
     const mPorGan2=gan2.length?Math.round(montoP2/gan2.length):0;
