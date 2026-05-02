@@ -152,7 +152,7 @@ function suscribirTorneos(){
 function renderLogin(){
   setApp(`<div class="lw"><div class="lc">
     <div class="ll">⚽</div><h1 class="lt">Prode Fútbol</h1><p class="ls">Ingresá para participar</p>
-    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v4.1</p>
+    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v4.2</p>
     <button class="btn-google" onclick="loginGoogle()"><svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 6.29C4.672 4.163 6.656 3.58 9 3.58z"/></svg>Entrar con Google</button>
     <div class="ld">o con tu mail</div>
     <input id="login-mail" class="li" type="email" placeholder="tu@mail.com"/>
@@ -1044,6 +1044,7 @@ function rtPronos(el){
       <span><span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:var(--c-success);margin-right:4px;vertical-align:middle"></span>Activa / En Ejecución</span>
       <span><span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:var(--c-info);margin-right:4px;vertical-align:middle"></span>Seleccionada</span>
     </div>
+    ${fObj.nroJugada?`<p style="font-size:12px;color:var(--c-info);font-weight:500;margin-bottom:6px">📋 Jugada N° ${fObj.nroJugada}</p>`:''}
     <input type="search" placeholder="🔍 Buscar participante..." value="${busqPron}"
       style="width:100%;max-width:360px;padding:6px 10px;font-size:13px;border:1px solid var(--c-border);border-radius:8px;background:var(--c-bg);color:var(--c-text);margin-bottom:8px;display:block"
       oninput="filtrarPronDom(this.value)"/>
@@ -1777,6 +1778,7 @@ function rtResultadosHist(el){
         <div>
           <span style="font-weight:500;font-size:13px">${f.nombre}</span>
           ${f.numero?`<span style="font-size:11px;color:var(--c-text2);margin-left:6px">Nº${f.numero}</span>`:''}
+          ${f.nroJugada?`<span style="font-size:11px;font-weight:600;color:var(--c-info);margin-left:6px">Jugada ${f.nroJugada}</span>`:''}
           ${hayPts?`<span style="font-size:12px;margin-left:8px" class="badge badge-green">${ptsTotales} pts</span>`:''}
           ${gano?`<span style="font-size:12px;margin-left:8px;font-weight:600;color:var(--c-warn)">${premioLabel}</span>`:''}
         </div>
