@@ -35,7 +35,8 @@ let S={uid:null,rol:null,perfil:null,torneoActivo:null,data:{config:{},torneos:{
 let unsubs=[];
 let pronBuffer={};
 const premiosSeccAbiertas=new Set(); // secciones abiertas en tab Premios
-let pronFechaIdx=0; // índice de la fecha seleccionada en pronósticos
+let pronFechaIdx=-1; // -1 = no inicializado todavía
+let pronFechaIdxInit=false; // flag para inicializar solo una vez por sesión
 // Estado de colapso persistente (no se resetea en re-render)
 const fechasExpandidas=new Set(); // indices fi de fechas expandidas en rtFechas
 const pronosExpandidos=new Set(); // uids expandidos en rtPronos
@@ -159,7 +160,7 @@ function suscribirTorneos(){
 function renderLogin(){
   setApp(`<div class="lw"><div class="lc">
     <div class="ll">⚽</div><h1 class="lt">Prode Fútbol</h1><p class="ls">Ingresá para participar</p>
-    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v4.5</p>
+    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v4.6</p>
     <button class="btn-google" onclick="loginGoogle()"><svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 6.29C4.672 4.163 6.656 3.58 9 3.58z"/></svg>Entrar con Google</button>
     <div class="ld">o con tu mail</div>
     <input id="login-mail" class="li" type="email" placeholder="tu@mail.com"/>
@@ -259,6 +260,10 @@ window.navTo=function(dest){
 function refreshTorneoView(){
   const content=document.getElementById('content');if(!content||!S.torneoActivo)return;
   const t=T();if(!t){content.innerHTML='<div class="empty-state">Cargando...</div>';return;}
+  if(_bufSLock){
+    // Re-render diferido: esperar a que el usuario termine de interactuar
+    setTimeout(refreshTorneoView,300);return;
+  }
   const isAdmin=S.rol==='admin';
   const tabs=isAdmin?['participantes-t','equipos','fechas','pronosticos','resultados','pagos','premios','posiciones']:['pronosticos','resultados-hist'];
   const labels={'participantes-t':'Participantes','equipos':'Equipos','fechas':'Fechas','resultados':'Resultados','pronosticos':'Pronósticos','pagos':'Pagos','premios':'Premios','posiciones':'Posiciones','resultados-hist':'📊 Resultados'};
@@ -284,13 +289,38 @@ function refreshTorneoView(){
   content.dataset.activeTab=activeTab;renderTab(activeTab);
 }
 window.switchTab=function(id,el){document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));el.classList.add('active');document.getElementById('content').dataset.activeTab=id;renderTab(id);};
+// Restaurar estado visual del pronBuffer después de re-render
+function restaurarPronBuffer(){
+  Object.entries(pronBuffer).forEach(([k,val])=>{
+    // k = "fi-pi-uid-signo" o "fi-pi-uid" (objeto)
+    if(!k.endsWith('-signo'))return;
+    const parts=k.split('-');
+    if(parts.length<4)return;
+    const fi=parts[0],pi=parts[1],uid=parts[2];
+    ['1','X','2'].forEach(s=>{
+      document.querySelectorAll(`button[onclick*="bufS(${fi},${pi},'${uid}','${s}')"]`).forEach(btn=>{
+        btn.classList.remove('sel-1','sel-X','sel-2');
+        if(val===s)btn.classList.add('sel-'+s);
+      });
+    });
+    // Mostrar indicador de cambios sin guardar
+    const smsgEl=document.getElementById(`smsg-${uid.slice(-6)}`);
+    if(smsgEl&&val&&!smsgEl.dataset.guardado){
+      smsgEl.textContent='⚠️ Cambios sin guardar';smsgEl.style.color='var(--c-warn)';
+    }
+  });
+}
+
 function renderTab(id){
   const el=document.getElementById('tab-content');if(!el)return;
   const fn={'participantes-t':rtParts,'equipos':rtEquipos,'fechas':rtFechas,
     'resultados':rtResultados,'pronosticos':rtPronos,'pagos':rtPagos,
     'premios':rtPremios,'posiciones':rtPos,'resultados-hist':rtResultadosHist}[id];
   if(!fn){console.warn('Tab desconocido:',id);return;}
-  try{fn(el);}catch(e){
+  try{
+    fn(el);
+    if(id==='pronosticos')setTimeout(restaurarPronBuffer,0);
+  }catch(e){
     console.error('Error en tab '+id+':',e);
     el.innerHTML='<p style="color:var(--c-danger);padding:16px;font-size:13px">Error: '+e.message+'</p>';
   }
@@ -910,8 +940,12 @@ function rtPronos(el){
     return;
   }
 
-  // Usar variable global para preservar entre re-renders
-  if(pronFechaIdx>=fechasV.length)pronFechaIdx=0;
+  // Inicializar: primera vez apuntar a fecha activa (o en ejecución), sino la primera
+  if(!pronFechaIdxInit||pronFechaIdx<0||pronFechaIdx>=fechasV.length){
+    const idxActiva=fechasV.findIndex(f=>f.estado==='activa'||f.estado==='en ejecucion');
+    pronFechaIdx=idxActiva>=0?idxActiva:0;
+    pronFechaIdxInit=true;
+  }
   const fiV=pronFechaIdx;
   el.dataset.fi=fiV;
   const fObj=fechasV[fiV];
@@ -1141,6 +1175,7 @@ window.toggleAus=async function(fi,uid){
   // pronFechaIdx persiste globalmente - no hay que restaurar nada
 };
 
+let _bufSLock=false; // evitar re-render durante interacción
 window.bufS=function(fi,pi,uid,signo){
   if(S.rol==='admin'){alert('El administrador no puede modificar pronósticos de participantes.');return;}
   if(S.rol==='participante'){
@@ -1165,6 +1200,8 @@ window.bufS=function(fi,pi,uid,signo){
   // Indicador de cambios sin guardar
   const smsgEl=document.getElementById(`smsg-${uid.slice(-6)}`);
   if(smsgEl&&!smsgEl.dataset.guardado){smsgEl.textContent='⚠️ Cambios sin guardar';smsgEl.style.color='var(--c-warn)';}
+  // Lock para evitar re-render mientras el usuario interactúa
+  _bufSLock=true;setTimeout(()=>{_bufSLock=false;},600);
 };
 window.bufE=function(fi,pi,uid,campo,val){const key=`${fi}-${pi}-${uid}`;if(!pronBuffer[key])pronBuffer[key]={gl:'',gv:''};pronBuffer[key][campo]=val;const p=pronBuffer[key];if(p.gl!==''&&p.gv!==''){const l=parseInt(p.gl),vv=parseInt(p.gv);pronBuffer[`${fi}-${pi}-${uid}-signo`]=l>vv?'1':l===vv?'X':'2';}};
 window.guardarPron=async function(fi,uid){
