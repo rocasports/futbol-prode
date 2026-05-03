@@ -160,7 +160,7 @@ function suscribirTorneos(){
 function renderLogin(){
   setApp(`<div class="lw"><div class="lc">
     <div class="ll">⚽</div><h1 class="lt">Prode Fútbol</h1><p class="ls">Ingresá para participar</p>
-    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v4.6</p>
+    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v4.7</p>
     <button class="btn-google" onclick="loginGoogle()"><svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 6.29C4.672 4.163 6.656 3.58 9 3.58z"/></svg>Entrar con Google</button>
     <div class="ld">o con tu mail</div>
     <input id="login-mail" class="li" type="email" placeholder="tu@mail.com"/>
@@ -208,7 +208,19 @@ window.enviarRegistro=async function(){
   await fset('config/global',{participantes:{[S.uid]:{nombre,apellido,dni,cel,mail,uid:S.uid,estado:'pendiente_aprobacion'}}});
   smsg('reg-msg','✅ Solicitud enviada');setTimeout(()=>renderEspera({nombre}),1200);
 };
-window.cerrarSesion=async function(){await signOut(auth);};
+
+// Verificar pronósticos sin guardar antes de cambiar de contexto
+function checkPronBuffer(msg){
+  if(S.rol!=='participante')return true;
+  if(!Object.keys(pronBuffer).length)return true;
+  const ok=confirm(msg||'⚠️ Tenés pronósticos sin guardar.\n\n¿Continuar? Los cambios NO guardados se perderán.');
+  if(ok)Object.keys(pronBuffer).forEach(k=>delete pronBuffer[k]);
+  return ok;
+}
+window.cerrarSesion=async function(){
+  if(!checkPronBuffer('⚠️ Tenés pronósticos sin guardar.\n\n¿Cerrar sesión de todas formas?'))return;
+  await signOut(auth);
+};
 
 function renderShell(){
   const isAdmin=S.rol==='admin';
@@ -245,8 +257,14 @@ function renderTorneosNav(){
   const visible=S.rol==='admin'?ts:ts.filter(t=>{const td=S.data.torneos[t.id];return td&&(td.participantes||[]).includes(S.uid);});
   nav.innerHTML=visible.map(t=>`<div class="ni ${S.torneoActivo===t.id?'active':''}" onclick="selectTorneo('${t.id}')"><span>${t.nombre}</span><span class="t-badge">${t.sistema==='1x2'?'1X2':'Exacto'}</span></div>`).join('');
 }
-window.selectTorneo=function(id){S.torneoActivo=id;renderTorneosNav();refreshTorneoView();};
+window.selectTorneo=function(id){
+  if(id===S.torneoActivo)return;
+  if(!checkPronBuffer('⚠️ Tenés pronósticos sin guardar.\n\n¿Cambiar de liga? Los cambios NO guardados se perderán.'))return;
+  pronFechaIdxInit=false; // resetear para la nueva liga
+  S.torneoActivo=id;renderTorneosNav();refreshTorneoView();
+};
 window.navTo=function(dest){
+  if(!checkPronBuffer('⚠️ Tenés pronósticos sin guardar.\n\n¿Navegar? Los cambios NO guardados se perderán.'))return;
   S.torneoActivo=null;renderTorneosNav();
   document.querySelectorAll('.ni').forEach(n=>n.classList.remove('active'));
   const el=document.getElementById('nav-'+dest);if(el)el.classList.add('active');
@@ -1104,7 +1122,15 @@ function rtPronos(el){
 }
 window.cambiarFP=function(fi){
   const el=document.getElementById('tab-content');if(!el)return;
-  pronFechaIdx=parseInt(fi); // actualizar variable global
+  // Advertir si hay buffer de la fecha actual (solo participante)
+  if(S.rol==='participante'){
+    const bufFecha=Object.keys(pronBuffer).some(k=>k.startsWith(pronFechaIdx+'-'));
+    if(bufFecha){
+      if(!confirm('⚠️ Tenés cambios sin guardar en esta fecha.\n\n¿Cambiar de fecha? Los cambios NO guardados se perderán.'))return;
+      Object.keys(pronBuffer).filter(k=>k.startsWith(pronFechaIdx+'-')).forEach(k=>delete pronBuffer[k]);
+    }
+  }
+  pronFechaIdx=parseInt(fi);
   pronosExpandidos.clear();
   el.dataset.fi=String(fi);
   renderTab('pronosticos');
@@ -1136,7 +1162,15 @@ window.filtrarPronDom=function(val){
 }
 window.cambiarFP=function(fi){
   const el=document.getElementById('tab-content');if(!el)return;
-  pronFechaIdx=parseInt(fi); // actualizar variable global
+  // Advertir si hay buffer de la fecha actual (solo participante)
+  if(S.rol==='participante'){
+    const bufFecha=Object.keys(pronBuffer).some(k=>k.startsWith(pronFechaIdx+'-'));
+    if(bufFecha){
+      if(!confirm('⚠️ Tenés cambios sin guardar en esta fecha.\n\n¿Cambiar de fecha? Los cambios NO guardados se perderán.'))return;
+      Object.keys(pronBuffer).filter(k=>k.startsWith(pronFechaIdx+'-')).forEach(k=>delete pronBuffer[k]);
+    }
+  }
+  pronFechaIdx=parseInt(fi);
   pronosExpandidos.clear();
   el.dataset.fi=String(fi);
   renderTab('pronosticos');
@@ -1235,7 +1269,15 @@ window.guardarPron=async function(fi,uid){
 };
 window.cambiarFP=function(fi){
   const el=document.getElementById('tab-content');if(!el)return;
-  pronFechaIdx=parseInt(fi); // actualizar variable global
+  // Advertir si hay buffer de la fecha actual (solo participante)
+  if(S.rol==='participante'){
+    const bufFecha=Object.keys(pronBuffer).some(k=>k.startsWith(pronFechaIdx+'-'));
+    if(bufFecha){
+      if(!confirm('⚠️ Tenés cambios sin guardar en esta fecha.\n\n¿Cambiar de fecha? Los cambios NO guardados se perderán.'))return;
+      Object.keys(pronBuffer).filter(k=>k.startsWith(pronFechaIdx+'-')).forEach(k=>delete pronBuffer[k]);
+    }
+  }
+  pronFechaIdx=parseInt(fi);
   pronosExpandidos.clear();
   el.dataset.fi=String(fi);
   renderTab('pronosticos');
