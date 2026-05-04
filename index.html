@@ -161,7 +161,7 @@ function suscribirTorneos(){
 function renderLogin(){
   setApp(`<div class="lw"><div class="lc">
     <div class="ll">⚽</div><h1 class="lt">Prode Fútbol</h1><p class="ls">Ingresá para participar</p>
-    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v5.8</p>
+    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v5.9</p>
     <button class="btn-google" onclick="loginGoogle()"><svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 6.29C4.672 4.163 6.656 3.58 9 3.58z"/></svg>Entrar con Google</button>
     <div class="ld">o con tu mail</div>
     <input id="login-mail" class="li" type="email" placeholder="tu@mail.com"/>
@@ -1283,25 +1283,33 @@ function saldoDisponibleParaFecha(uid,fi,t){
 window.toggleAus=async function(fi,uid){
   const t=T();if(!t)return;
   const f=(t.fechas||[])[fi];
-  if(f&&(f.estado==='en ejecucion'||f.estado==='terminada')){
-    alert(`No se puede cambiar la habilitación en una fecha "${ESTADO_LABEL[f.estado]}".`);return;
+  const estado=f?.estado||'planificada';
+
+  // Solo se puede cambiar habilitación cuando la fecha está Activa
+  if(estado!=='activa'){
+    alert(`Solo se puede habilitar/deshabilitar cuando la fecha está Activa.\nEstado actual: "${ESTADO_LABEL[estado]||estado}"`);
+    return;
   }
-  const aus=JSON.parse(JSON.stringify(t.ausencias||{}));
+
+  // Leer estado actual directamente de t.ausencias
+  const ausData=t.ausencias||{};
   const k=`${fi}-${uid}`;
-  const estaAusente=ausente(fi,uid);
-  if(estaAusente){
-    // Verificar saldo: BLOQUEAR si no alcanza
+  const estaFuera=(k in ausData)?ausData[k]!==false:true; // true = no habilitado
+
+  if(estaFuera){
+    // Quiere HABILITAR → validar saldo
     const {disponible,cuotaFi,alcanza}=saldoDisponibleParaFecha(uid,fi,t);
+    console.log('Saldo check:',{uid,fi,disponible,cuotaFi,alcanza,totalPagado:(t.pagosDetalle?.[uid]||[]).reduce((s,m)=>s+m.monto,0)});
     if(!alcanza){
       const p=allParts()[uid]||{};
       const nombre=p.nombre?`${p.nombre} ${p.apellido}`:uid;
-      alert(`❌ No se puede habilitar a ${nombre}.\n\nSaldo disponible: $${disponible.toLocaleString()}\nCuota de esta fecha: $${cuotaFi.toLocaleString()}\n\nEl participante debe abonar al menos $${(cuotaFi-disponible).toLocaleString()} para poder jugar.`);
+      alert(`❌ No se puede habilitar a ${nombre}.\n\nSaldo disponible: $${disponible.toLocaleString()}\nCuota de esta fecha: $${cuotaFi.toLocaleString()}\nFalta abonar: $${Math.max(0,cuotaFi-disponible).toLocaleString()}`);
       return;
     }
-    aus[k]=false;
-  } else {
-    aus[k]=true;
   }
+
+  const aus=JSON.parse(JSON.stringify(ausData));
+  aus[k]=estaFuera?false:true; // habilitar o deshabilitar
   await fupd(`torneos/${S.torneoActivo}`,{ausencias:aus});
 };
 
