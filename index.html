@@ -161,7 +161,7 @@ function suscribirTorneos(){
 function renderLogin(){
   setApp(`<div class="lw"><div class="lc">
     <div class="ll">⚽</div><h1 class="lt">Prode Fútbol</h1><p class="ls">Ingresá para participar</p>
-    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v5.1</p>
+    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v5.2</p>
     <button class="btn-google" onclick="loginGoogle()"><svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 6.29C4.672 4.163 6.656 3.58 9 3.58z"/></svg>Entrar con Google</button>
     <div class="ld">o con tu mail</div>
     <input id="login-mail" class="li" type="email" placeholder="tu@mail.com"/>
@@ -1402,7 +1402,10 @@ function rtPagos(el){
         return`<td style="text-align:center"><span style="font-size:11px">$${cuota.toLocaleString()}</span></td>`;
       }).join('');
       return`<tr class="pago-row" data-busq="${busqData}">
-        <td style="font-weight:500;white-space:nowrap;position:sticky;left:0;background:var(--c-bg);z-index:1;border-right:1px solid var(--c-border)">${nombre}</td>
+        <td style="position:sticky;left:0;background:var(--c-bg);z-index:1;border-right:1px solid var(--c-border)">
+          <div style="font-weight:500;white-space:nowrap">${nombre}</div>
+          <div style="font-size:10px;color:var(--c-text2)">${[p.mail,p.dni].filter(Boolean).join(' · ')}</div>
+        </td>
         ${celdas}
         <td style="text-align:right;font-size:11px">$${totalJugado.toLocaleString()}</td>
         <td style="text-align:right;font-size:11px;color:var(--c-success)">$${totalGanado.toLocaleString()}</td>
@@ -1472,22 +1475,22 @@ function rtPagos(el){
         <div><label style="font-size:11px;display:block;margin-bottom:2px">Participante</label>
           <input type="search" placeholder="Buscar..." value="${busqCron}"
             style="padding:5px 8px;font-size:12px;border:1px solid var(--c-border);border-radius:8px;background:var(--c-bg);color:var(--c-text)"
-            oninput="el_dataset_set('busqCron',this.value);setPagosVista('cronologico')"/></div>
+            oninput="filtrarCronPagos('busqCron',this.value)"/></div>
         <div><label style="font-size:11px;display:block;margin-bottom:2px">Desde</label>
           <input type="date" value="${filtFechaD}"
             style="padding:5px;font-size:12px;border:1px solid var(--c-border);border-radius:8px;background:var(--c-bg);color:var(--c-text)"
-            onchange="el_dataset_set('filtFechaD',this.value);setPagosVista('cronologico')"/></div>
+            onchange="filtrarCronPagos('filtFechaD',this.value)"/></div>
         <div><label style="font-size:11px;display:block;margin-bottom:2px">Hasta</label>
           <input type="date" value="${filtFechaH}"
             style="padding:5px;font-size:12px;border:1px solid var(--c-border);border-radius:8px;background:var(--c-bg);color:var(--c-text)"
-            onchange="el_dataset_set('filtFechaH',this.value);setPagosVista('cronologico')"/></div>
+            onchange="filtrarCronPagos('filtFechaH',this.value)"/></div>
         <div><label style="font-size:11px;display:block;margin-bottom:2px">Monto mín. $</label>
           <input type="number" min="0" placeholder="0" value="${filtMonto}"
             style="width:90px;padding:5px 8px;font-size:12px;border:1px solid var(--c-border);border-radius:8px;background:var(--c-bg);color:var(--c-text)"
-            oninput="el_dataset_set('filtMonto',this.value);setPagosVista('cronologico')"/></div>
+            oninput="filtrarCronPagos('filtMonto',this.value)"/></div>
         <span style="font-size:12px;color:var(--c-text2);align-self:center">${allMovs.length} movimiento${allMovs.length!==1?'s':''}</span>
       </div>
-      <div style="overflow-x:auto"><table style="width:100%;font-size:12px">
+      <div style="overflow-x:auto"><table id="tabla-cron-pagos" style="width:100%;font-size:12px">
         <thead><tr><th>Fecha</th><th>Monto</th><th>Forma</th><th>Participante</th><th>Mail</th><th>Nota</th><th></th></tr></thead>
         <tbody>${filas||'<tr><td colspan="7" style="text-align:center;color:var(--c-text3)">Sin resultados</td></tr>'}</tbody>
       </table></div>
@@ -1527,7 +1530,10 @@ function rtPagos(el){
       return`<div class="card pago-row" data-busq="${busqData}" style="margin-bottom:6px">
         <div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="toggleMovParticipante('${uid}',event.currentTarget)">
           <div>
+            <div>
             <span style="font-weight:500;font-size:13px">${nombre}</span>
+            ${(()=>{const pp=allParts()[uid]||{};const info=[pp.mail,pp.dni].filter(Boolean).join(' · ');return info?`<div style="font-size:11px;color:var(--c-text2)">${info}</div>`:''})()}
+          </div>
             ${(()=>{const pp=allParts()[uid]||{};return pp.mail?`<br><span style="font-size:11px;color:var(--c-text2)">${pp.mail}</span>`:''})()}
           </div>
           <div style="display:flex;gap:8px;align-items:center">
@@ -1573,6 +1579,30 @@ window.toggleMovParticipante=function(uid,el){
 
 window.el_dataset_set=function(key,val){
   const el=document.getElementById('tab-content');if(el)el.dataset[key]=val;
+};
+window.filtrarCronPagos=function(key,val){
+  const el=document.getElementById('tab-content');if(!el)return;
+  el.dataset[key]=val;
+  // Filtrar filas directamente en el DOM sin re-render
+  const busq=(el.dataset.busqCron||'').toLowerCase();
+  const desde=el.dataset.filtFechaD||'';
+  const hasta=el.dataset.filtFechaH||'';
+  const montoMin=parseFloat(el.dataset.filtMonto)||0;
+  document.querySelectorAll('#tabla-cron-pagos tbody tr').forEach(tr=>{
+    const cols=tr.querySelectorAll('td');
+    if(!cols.length)return;
+    const fecha=cols[0]?.textContent||'';
+    const monto=parseFloat((cols[1]?.textContent||'0').replace(/[$,.]/g,''))||0;
+    const part=(cols[3]?.textContent||'').toLowerCase();
+    const mail=(cols[4]?.textContent||'').toLowerCase();
+    const ok=(
+      (!busq||(part+' '+mail).includes(busq))&&
+      (!desde||fecha>=desde)&&
+      (!hasta||fecha<=hasta)&&
+      (!montoMin||monto>=montoMin)
+    );
+    tr.style.display=ok?'':'none';
+  });
 };
 window.abrirNuevoPago=function(uid){
   const p=allParts()[uid]||{};
@@ -1620,6 +1650,7 @@ window.guardarMov=async function(uid,miIdx){
   movExpandidos.add(uid);
   const modal=document.getElementById('modal-pago');if(modal)modal.style.display='none';
   if(typeof cerrarModal==='function')cerrarModal();
+  // No cambiar vista - renderTab('pagos') disparado por Firestore mantiene la vista actual
 };;
 
 window.editarMov=function(uid,mi){
@@ -2085,9 +2116,9 @@ function rtPagosPart(el){
           <div style="font-size:11px;color:var(--c-text2)">Total Pagado</div>
           <div style="font-size:18px;font-weight:600;margin-top:4px">$${totalPagado.toLocaleString()}</div>
         </div>
-        <div style="background:${debe===0?'var(--c-success-bg)':'var(--c-danger-bg)'};border:1px solid ${debe===0?'var(--c-success-border)':'var(--c-danger-border)'};border-radius:10px;padding:12px;text-align:center">
-          <div style="font-size:11px;color:${debe===0?'var(--c-success)':'var(--c-danger)'}">Saldo</div>
-          <div style="font-size:18px;font-weight:600;color:${debe===0?'var(--c-success)':'var(--c-danger)'};margin-top:4px">${debe===0?'✓ Al día':'Debés $'+debe.toLocaleString()}</div>
+        <div style="background:${(totalPagado-totalJugado)>=0?'var(--c-success-bg)':'var(--c-danger-bg)'};border:1px solid ${(totalPagado-totalJugado)>=0?'var(--c-success-border)':'var(--c-danger-border)'};border-radius:10px;padding:12px;text-align:center">
+          <div style="font-size:11px;color:${(totalPagado-totalJugado)>=0?'var(--c-success)':'var(--c-danger)'}">Saldo</div>
+          <div style="font-size:18px;font-weight:600;color:${(totalPagado-totalJugado)>=0?'var(--c-success)':'var(--c-danger)'};margin-top:4px">${(totalPagado-totalJugado)>=0?'+':''}$${(totalPagado-totalJugado).toLocaleString()}</div>
         </div>
       </div>
       ${movs.length?`<p style="font-size:12px;font-weight:500;margin-bottom:6px">Historial de pagos</p>
@@ -2105,7 +2136,7 @@ function rtPagosPart(el){
 function rtPos(el){
   const t=T();if(!t)return;const m=meta();
   const uids=partsT();const isAdmin=S.rol==='admin';
-  const ranking=uids.map(uid=>({uid,nombre:nombrePart(uid),pts:totalG(uid,t,m)})).sort((a,b)=>b.pts-a.pts);
+  const ranking=uids.map(uid=>{const pp=allParts()[uid]||{};return{uid,nombre:nombrePart(uid),mail:pp.mail||'',dni:pp.dni||'',pts:totalG(uid,t,m)};}).sort((a,b)=>b.pts-a.pts);
   const cuota=t.cuota||500;
   const totalRec=uids.reduce((s,uid)=>s+(t.pagosDetalle?.[uid]||[]).reduce((ss,m)=>ss+m.monto,0),0);
   const deudores=uids.filter(uid=>{const {saldo}=distribuirPagos(uid,t)||{};const totalPag=(t.pagosDetalle?.[uid]||[]).reduce((s,m)=>s+m.monto,0);const totalDebe=(t.fechas||[]).reduce((s,_,fi)=>s+(ausente(fi,uid)?0:cuotaFecha(fi)),0);return totalPag<totalDebe;}).length;
@@ -2121,7 +2152,11 @@ function rtPos(el){
       const {totalDebe:debe}=distribuirPagos(r.uid,t);
       const saldo=pagado-debe;const esMio=r.uid===S.uid;
       return`<tr ${esMio?'style="background:var(--c-info-bg)"':''}>
-        <td>${i+1}</td><td style="font-weight:${i<3?'500':'400'};white-space:nowrap">${i===0?'🥇 ':i===1?'🥈 ':i===2?'🥉 ':''}${r.nombre}${esMio?' ⬅':''}</td>
+        <td>${i+1}</td>
+        <td style="font-weight:${i<3?'500':'400'};white-space:nowrap">
+          ${i===0?'🥇 ':i===1?'🥈 ':i===2?'🥉 ':''}${r.nombre}${esMio?' ⬅':''}
+          <div style="font-size:10px;color:var(--c-text2);font-weight:400">${[r.mail,r.dni].filter(Boolean).join(' · ')}</div>
+        </td>
         <td style="font-weight:500">${r.pts}</td>
         ${(t.fechas||[]).map((_,fi)=>{const tp=totalF(fi,r.uid,t,m);const aus=ausente(fi,r.uid);return`<td>${aus?'<span class="badge badge-gray">–</span>':tp!==null?tp:'?'}</td>`;}).join('')}
         ${isAdmin?`<td><span class="badge ${saldo>=0?'badge-green':'badge-red'}">${saldo>=0?'Al día':'Debe $'+Math.abs(saldo).toLocaleString()}</span></td>`:''}
