@@ -161,7 +161,7 @@ function suscribirTorneos(){
 function renderLogin(){
   setApp(`<div class="lw"><div class="lc">
     <div class="ll">⚽</div><h1 class="lt">Prode Fútbol</h1><p class="ls">Ingresá para participar</p>
-    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v6.2</p>
+    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v6.3</p>
     <button class="btn-google" onclick="loginGoogle()"><svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 6.29C4.672 4.163 6.656 3.58 9 3.58z"/></svg>Entrar con Google</button>
     <div class="ld">o con tu mail</div>
     <input id="login-mail" class="li" type="email" placeholder="tu@mail.com"/>
@@ -620,7 +620,9 @@ window.guardarEditFecha=async function(fi){
   if(fechas.some((f,i)=>i!==fi&&f.nombre.toLowerCase()===nombre.toLowerCase()))return alert('Ya existe una fecha con ese nombre');
   if(nroJugadaEdit&&fechas.some((f,i)=>i!==fi&&String(f.nroJugada)===String(nroJugadaEdit)))return alert(`Ya existe la Jugada N° ${nroJugadaEdit}`);
   const nuevas=JSON.parse(JSON.stringify(fechas));
-  nuevas[fi]={...nuevas[fi],nombre,numero:parseInt(numero),nroJugada:nroJugadaEdit?parseInt(nroJugadaEdit):null,inicio:inicio||null};
+  const cuotaEdit=parseFloat(document.getElementById('edit-cuota-'+fi)?.value)||null;
+  nuevas[fi]={...nuevas[fi],nombre,numero:parseInt(numero),nroJugada:nroJugadaEdit?parseInt(nroJugadaEdit):null,inicio:inicio||null,
+    ...(cuotaEdit?{cuota:cuotaEdit}:{})};
   await fupd(`torneos/${S.torneoActivo}`,{fechas:nuevas});
   editandoFecha=-1;
 };
@@ -636,6 +638,12 @@ function rtFechas(el){
       <input id="f-jugada" type="number" min="1" placeholder="Ej: 847" style="max-width:80px" value="${(()=>{const js=(T()?.fechas||[]).map(f=>f.nroJugada||0).filter(n=>n>0);return js.length?Math.max(...js)+1:'';})()}"/>
       <label class="lbl" style="min-width:auto;margin-left:8px">Nombre:</label>
       <input id="f-nombre" placeholder="Nombre de la fecha *"/>
+    </div>
+    <div class="row"><label class="lbl">Cuota $:</label>
+      <input id="f-cuota" type="number" min="0" step="100"
+        value="${(()=>{const fs=T()?.fechas||[];const ultima=fs.filter(f=>f.cuota).slice(-1)[0];return ultima?.cuota??T()?.cuota??500;})()}"
+        style="max-width:100px" placeholder="Ej: 5000"/>
+      <span style="font-size:11px;color:var(--c-text2)">$ (propone el valor de la última fecha)</span>
     </div>
     <div class="row"><label class="lbl">Inicio:</label><input id="f-inicio" type="date" style="max-width:160px"/><span style="font-size:11px;color:var(--c-text2)">(opcional)</span></div>
     <button class="btn btn-primary btn-sm" onclick="addFecha()">Crear fecha</button>
@@ -672,6 +680,7 @@ function rtFechas(el){
               <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
                 <input id="edit-num-${fi}" type="number" min="1" value="${f.numero||''}" style="width:60px;padding:4px 6px;font-size:12px;border:1px solid var(--c-border);border-radius:6px;background:var(--c-bg);color:var(--c-text)" placeholder="N°"/>
                 <input id="edit-jugada-${fi}" type="number" min="1" value="${f.nroJugada||''}" style="width:75px;padding:4px 6px;font-size:12px;border:1px solid var(--c-border);border-radius:6px;background:var(--c-bg);color:var(--c-text)" placeholder="Jugada#"/>
+                <input id="edit-cuota-${fi}" type="number" min="0" step="100" value="${f.cuota??t.cuota??500}" style="width:75px;padding:4px 6px;font-size:12px;border:1px solid var(--c-border);border-radius:6px;background:var(--c-bg);color:var(--c-text)" placeholder="Cuota $"/>
                 <input id="edit-nombre-${fi}" value="${f.nombre}" style="flex:1;min-width:120px;padding:4px 8px;font-size:13px;border:1px solid var(--c-border);border-radius:6px;background:var(--c-bg);color:var(--c-text)" placeholder="Nombre"/>
               </div>
               <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
@@ -1388,7 +1397,12 @@ window.cambiarFP=function(fi){
 // toggleAus legacy eliminado - usar la definición principal
 
 // ── TAB PAGOS ────────────────────────────────────────────────
-function cuotaFecha(fi){const t=T();if(!t)return 0;return t.cuotasFecha?.[fi]??t.cuota??500;}
+function cuotaFecha(fi){
+  const t=T();if(!t)return 0;
+  const f=(t.fechas||[])[fi];
+  // Prioridad: cuota específica de la fecha → override en cuotasFecha → cuota base del torneo
+  return f?.cuota??t.cuotasFecha?.[fi]??t.cuota??500;
+}
 
 // Índice de la fecha activa
 function fechaActivaIdx(){const t=T();if(!t)return -1;return(t.fechas||[]).findIndex(f=>f.estado==='activa');}
@@ -1419,13 +1433,7 @@ function rtPagos(el){
     style="width:100%;max-width:360px;padding:6px 10px;font-size:13px;border:1px solid var(--c-border);border-radius:8px;background:var(--c-bg);color:var(--c-text);margin-bottom:8px;display:block"
     oninput="filtrarPagos(this.value)"/>`;
 
-  const cfgBase=`<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
-    <label style="font-size:12px">Cuota base:</label>
-    <input type="number" min="0" step="100" value="${cuotaBase}"
-      style="max-width:80px;padding:5px 8px;font-size:13px;border:1px solid var(--c-border);border-radius:8px;background:var(--c-bg);color:var(--c-text)"
-      onblur="saveCuota(this.value)"/>
-    <span style="font-size:12px;color:var(--c-text2)">$ base — aplica solo a fechas Planificadas · editable por fecha individualmente</span>
-  </div>`;
+  const cfgBase='';
 
   if(vista==='resumen'){
     // Header fechas
@@ -1438,14 +1446,7 @@ function rtPagos(el){
         <div style="font-size:10px;font-weight:500;color:${esActiva?'var(--c-success)':'var(--c-text2)'}">${f.nombre}${esActiva?' 🟢':''}</div>
         <div style="display:flex;gap:2px;align-items:center;margin-top:2px">
           <span style="font-size:9px;color:var(--c-text3)">$</span>
-          ${bloqueada
-            ?`<span style="font-size:11px;font-weight:500">${(t.cuotasFecha?.[fi]??cuotaBase).toLocaleString()}</span>`
-            :`<input type="number" min="0" step="100" value="${t.cuotasFecha?.[fi]??cuotaBase}"
-              id="cuota-fi-${fi}"
-              style="width:52px;padding:2px 3px;font-size:10px;border:1px solid var(--c-border);border-radius:4px;background:var(--c-bg2);color:var(--c-text)"
-              oninput="marcarCuotaCambiada(${fi})"/>
-            <button id="btn-cuota-${fi}" onclick="guardarCuotaFecha(${fi})"
-              style="display:none;font-size:9px;padding:1px 4px;background:var(--c-primary);color:#fff;border:none;border-radius:3px;cursor:pointer;margin-left:2px">💾</button>`}
+          <span style="font-size:11px;font-weight:500">$${(t.cuotasFecha?.[fi]??cuotaBase).toLocaleString()}</span>
         </div>
       </th>`;
     }).join('');
