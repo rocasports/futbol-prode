@@ -161,7 +161,7 @@ function suscribirTorneos(){
 function renderLogin(){
   setApp(`<div class="lw"><div class="lc">
     <div class="ll">⚽</div><h1 class="lt">Prode Fútbol</h1><p class="ls">Ingresá para participar</p>
-    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v6.3</p>
+    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v6.4</p>
     <button class="btn-google" onclick="loginGoogle()"><svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 6.29C4.672 4.163 6.656 3.58 9 3.58z"/></svg>Entrar con Google</button>
     <div class="ld">o con tu mail</div>
     <input id="login-mail" class="li" type="email" placeholder="tu@mail.com"/>
@@ -667,6 +667,7 @@ function rtFechas(el){
           <span style="font-weight:500;font-size:13px">${f.nombre}</span>
           ${f.numero?`<span style="font-size:11px;color:var(--c-text2);margin-left:6px">Nº${f.numero}</span>`:''}
           ${f.nroJugada?`<span style="font-size:11px;font-weight:600;color:var(--c-info);margin-left:6px">Jugada ${f.nroJugada}</span>`:''}
+          <span style="font-size:11px;font-weight:500;color:var(--c-text2);margin-left:6px">$${(f.cuota??t.cuota??500).toLocaleString()}</span>
           <span style="font-size:11px;margin-left:6px;color:${ec}">${ESTADO_LABEL[f.estado||'planificada']}</span>
           ${f.inicio?`<span style="font-size:11px;color:var(--c-text2);margin-left:6px">📅 ${f.inicio}</span>`:''}
         </div>
@@ -750,7 +751,21 @@ window.addFecha=async function(){
   if(nroJugadaStr&&fechas.find(f=>String(f.nroJugada)===String(nroJugadaStr)))return emsg('fecha-msg',`Ya existe la Jugada N° ${nroJugadaStr}`);
   if(fechas.find(f=>f.nombre.toLowerCase()===nombre.toLowerCase()))return emsg('fecha-msg','Ya existe una fecha con ese nombre');
   await fupd(`torneos/${S.torneoActivo}`,{fechas:[{nombre,numero:parseInt(numero),inicio:inicio||null,partidos:[],estado:'planificada'},...fechas]});
-  document.getElementById('f-nombre').value='';document.getElementById('f-num').value='';document.getElementById('f-inicio').value='';
+  document.getElementById('f-nombre').value='';
+  document.getElementById('f-inicio').value='';
+  // Re-calcular siguiente número y cuota para próxima fecha
+  const t2=T();
+  if(t2){
+    const nums2=(t2.fechas||[]).map(f=>parseInt(f.numero||0)).filter(n=>!isNaN(n));
+    const nextNum=nums2.length?Math.max(...nums2)+1:1;
+    const numInp=document.getElementById('f-num');if(numInp)numInp.value=nextNum;
+    const cuotas2=(t2.fechas||[]).map(f=>f.cuota).filter(Boolean);
+    const nextCuota=cuotas2.length?cuotas2[cuotas2.length-1]:t2.cuota||500;
+    const cuotaInp=document.getElementById('f-cuota');if(cuotaInp)cuotaInp.value=nextCuota;
+    const jugs2=(t2.fechas||[]).map(f=>parseInt(f.nroJugada||0)).filter(n=>n>0);
+    const nextJug=jugs2.length?Math.max(...jugs2)+1:'';
+    const jugInp=document.getElementById('f-jugada');if(jugInp)jugInp.value=nextJug;
+  }
 };
 
 window.cambiarEstado=async function(fi,nuevoEstado){
@@ -798,9 +813,18 @@ window.removeFecha=async function(fi){
   }
   // FIX 2a: verificar que no haya pronósticos de ningún participante en esta fecha
   const prons=t.pronosticos||{};
-  const tieneProns=Object.keys(prons).some(k=>k.startsWith(`${fi}-`));
+  const uidsValidos=new Set(t.participantes||[]);
+  // Verificar que hay pronósticos de participantes ACTUALES en esta fecha
+  const tieneProns=Object.keys(prons).some(k=>{
+    const parts=k.split('-');
+    if(parts.length<3)return false;
+    if(parts[0]!==String(fi))return false;
+    // El uid está en posición 2
+    const uid=parts[2];
+    return uidsValidos.has(uid);
+  });
   if(tieneProns){
-    alert(`No se puede eliminar "${f.nombre}" porque ya hay pronósticos cargados de participantes.`);return;
+    alert(`No se puede eliminar "${f.nombre}" porque hay pronósticos cargados de participantes.`);return;
   }
   if(!confirm(`¿Eliminar "${f.nombre}"? Esta acción no se puede deshacer.`))return;
   const fechas=JSON.parse(JSON.stringify(t.fechas||[]));fechas.splice(fi,1);
