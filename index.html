@@ -161,7 +161,7 @@ function suscribirTorneos(){
 function renderLogin(){
   setApp(`<div class="lw"><div class="lc">
     <div class="ll">⚽</div><h1 class="lt">Prode Fútbol</h1><p class="ls">Ingresá para participar</p>
-    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v5.7</p>
+    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v5.8</p>
     <button class="btn-google" onclick="loginGoogle()"><svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 6.29C4.672 4.163 6.656 3.58 9 3.58z"/></svg>Entrar con Google</button>
     <div class="ld">o con tu mail</div>
     <input id="login-mail" class="li" type="email" placeholder="tu@mail.com"/>
@@ -1098,8 +1098,10 @@ function rtPronos(el){
       const pronExpandido=pronosExpandidos.has(uid)||(S.rol==='participante'&&uid===S.uid);
       return`<div class="pron-card card" data-busq="${busqData}" data-uid="${uid}">
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;cursor:pointer" onclick="togglePronCard(this)">
-          <p style="font-weight:500;font-size:13px;margin:0">${nombre}${cerrado?'<span style="font-size:10px;color:var(--c-text3);margin-left:6px">🔒</span>':''}</p>
-
+          <div>
+            <p style="font-weight:500;font-size:13px;margin:0">${nombre}${cerrado?'<span style="font-size:10px;color:var(--c-text3);margin-left:6px">🔒</span>':''}</p>
+            ${(()=>{const pp=allParts()[uid]||{};const info=[pp.mail,pp.dni].filter(Boolean).join(' · ');return info?`<span style="font-size:11px;color:var(--c-text2)">${info}</span>`:''})()}
+          </div>
           <span class="pron-arrow">${pronExpandido?'▲':'▼'}</span>
         </div>
         <div class="pron-body" style="display:${pronExpandido?'block':'none'};margin-top:8px">
@@ -1217,9 +1219,13 @@ function calcSaldoUid(uid, t){
   let totalDebe=0;
   let totalJugado=0;
 
+  const ausData=t.ausencias||{};
   fechas.forEach((f,fi)=>{
     if(fi>hasta){cobertura[fi]='futuro';return;}
-    if(ausente(fi,uid)){cobertura[fi]='ausente';return;}
+    // Leer directamente de t.ausencias (no de T() global)
+    const kAus=`${fi}-${uid}`;
+    const estaFuera=(kAus in ausData)?ausData[kAus]!==false:true;
+    if(estaFuera){cobertura[fi]='ausente';return;}
     const cf=t.cuotasFecha?.[fi]??t.cuota??500;
     totalDebe+=cf;
     totalJugado+=cf;
