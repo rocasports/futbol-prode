@@ -1110,7 +1110,7 @@ function rtPronos(el){
             const fEstado=fObj.estado||'planificada';
             const bloqAus=fEstado==='en ejecucion'||fEstado==='terminada';
             if(bloqAus)return`<span style="font-size:11px;color:var(--c-text3)">${!ausente(fiReal,uid)?'✓ Habilitado':'⛔ No habilitado'} 🔒</span>`;
-            return`<button class="ausencia-toggle ${!ausente(fiReal,uid)?'':'ausente'}" onclick="event.stopPropagation();toggleAus(${fiReal},'${uid}')">${!ausente(fiReal,uid)?'✓ Habilitado':'⛔ No habilitado'}</button>`;
+            return`<button class="ausencia-toggle ${!ausente(fiReal,uid)?'':'ausente'}" onclick="event.stopPropagation();console.log('btn click fi=${fiReal} uid=${uid}');toggleAus(${fiReal},'${uid}')">${!ausente(fiReal,uid)?'✓ Habilitado':'⛔ No habilitado'}</button>`;
           })():''}
             ${btnGuardar}
           </div>
