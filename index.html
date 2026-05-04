@@ -161,7 +161,7 @@ function suscribirTorneos(){
 function renderLogin(){
   setApp(`<div class="lw"><div class="lc">
     <div class="ll">⚽</div><h1 class="lt">Prode Fútbol</h1><p class="ls">Ingresá para participar</p>
-    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v5.0</p>
+    <p style="font-size:11px;color:var(--c-text3);text-align:center;margin-top:-12px;margin-bottom:12px">v5.1</p>
     <button class="btn-google" onclick="loginGoogle()"><svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 6.29C4.672 4.163 6.656 3.58 9 3.58z"/></svg>Entrar con Google</button>
     <div class="ld">o con tu mail</div>
     <input id="login-mail" class="li" type="email" placeholder="tu@mail.com"/>
@@ -1354,6 +1354,7 @@ function rtPagos(el){
   const tabsBtns=`<div style="display:flex;gap:6px;margin-bottom:10px">
     <button class="btn btn-sm ${vista==='resumen'?'btn-primary':''}" onclick="setPagosVista('resumen')">Resumen</button>
     <button class="btn btn-sm ${vista==='movimientos'?'btn-primary':''}" onclick="setPagosVista('movimientos')">Movimientos</button>
+    <button class="btn btn-sm ${vista==='cronologico'?'btn-primary':''}" onclick="setPagosVista('cronologico')">Cronológico</button>
   </div>`;
 
   const buscadorPagos=`<input type="search" placeholder="🔍 Buscar participante..." value="${el.dataset.busqPagos||''}"
@@ -1430,6 +1431,68 @@ function rtPagos(el){
       },100);
     }
 
+  } else if(vista==='cronologico'){
+    // Vista cronológica: todos los pagos ordenados por fecha
+    const busqCron=el.dataset.busqCron||'';
+    const filtFechaD=el.dataset.filtFechaD||'';
+    const filtFechaH=el.dataset.filtFechaH||'';
+    const filtMonto=el.dataset.filtMonto||'';
+    // Recopilar todos los movimientos
+    let allMovs=[];
+    uids.forEach(uid=>{
+      const p=allParts()[uid]||{};
+      const nombre=p.nombre?`${p.nombre} ${p.apellido}`:uid;
+      (t.pagosDetalle?.[uid]||[]).forEach((m,mi)=>{
+        allMovs.push({uid,nombre,mail:p.mail||'',mi,...m});
+      });
+    });
+    // Filtros
+    allMovs=allMovs.filter(m=>{
+      if(busqCron&&!(`${m.nombre} ${m.mail}`.toLowerCase().includes(busqCron.toLowerCase())))return false;
+      if(filtFechaD&&(m.fecha||'')<filtFechaD)return false;
+      if(filtFechaH&&(m.fecha||'')>filtFechaH)return false;
+      if(filtMonto&&parseFloat(m.monto)<parseFloat(filtMonto))return false;
+      return true;
+    });
+    allMovs.sort((a,b)=>(a.fecha||'')>(b.fecha||'')?-1:1);
+    const filas=allMovs.map(m=>`<tr>
+      <td>${m.fecha||'—'}</td>
+      <td style="font-weight:500">$${m.monto.toLocaleString()}</td>
+      <td>${m.forma||'—'}</td>
+      <td>${m.nombre}</td>
+      <td style="color:var(--c-text2);font-size:11px">${m.mail}</td>
+      <td style="color:var(--c-text2)">${m.nota||''}</td>
+      <td style="white-space:nowrap">
+        <button onclick="editarMov('${m.uid}',${m.mi})" style="background:none;border:none;cursor:pointer;color:var(--c-info)" title="Editar">✏</button>
+        <button onclick="eliminarMov('${m.uid}',${m.mi})" style="background:none;border:none;cursor:pointer;color:var(--c-danger)" title="Eliminar">✕</button>
+      </td>
+    </tr>`).join('');
+    el.innerHTML=tabsBtns+`
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;align-items:flex-end">
+        <div><label style="font-size:11px;display:block;margin-bottom:2px">Participante</label>
+          <input type="search" placeholder="Buscar..." value="${busqCron}"
+            style="padding:5px 8px;font-size:12px;border:1px solid var(--c-border);border-radius:8px;background:var(--c-bg);color:var(--c-text)"
+            oninput="el_dataset_set('busqCron',this.value);setPagosVista('cronologico')"/></div>
+        <div><label style="font-size:11px;display:block;margin-bottom:2px">Desde</label>
+          <input type="date" value="${filtFechaD}"
+            style="padding:5px;font-size:12px;border:1px solid var(--c-border);border-radius:8px;background:var(--c-bg);color:var(--c-text)"
+            onchange="el_dataset_set('filtFechaD',this.value);setPagosVista('cronologico')"/></div>
+        <div><label style="font-size:11px;display:block;margin-bottom:2px">Hasta</label>
+          <input type="date" value="${filtFechaH}"
+            style="padding:5px;font-size:12px;border:1px solid var(--c-border);border-radius:8px;background:var(--c-bg);color:var(--c-text)"
+            onchange="el_dataset_set('filtFechaH',this.value);setPagosVista('cronologico')"/></div>
+        <div><label style="font-size:11px;display:block;margin-bottom:2px">Monto mín. $</label>
+          <input type="number" min="0" placeholder="0" value="${filtMonto}"
+            style="width:90px;padding:5px 8px;font-size:12px;border:1px solid var(--c-border);border-radius:8px;background:var(--c-bg);color:var(--c-text)"
+            oninput="el_dataset_set('filtMonto',this.value);setPagosVista('cronologico')"/></div>
+        <span style="font-size:12px;color:var(--c-text2);align-self:center">${allMovs.length} movimiento${allMovs.length!==1?'s':''}</span>
+      </div>
+      <div style="overflow-x:auto"><table style="width:100%;font-size:12px">
+        <thead><tr><th>Fecha</th><th>Monto</th><th>Forma</th><th>Participante</th><th>Mail</th><th>Nota</th><th></th></tr></thead>
+        <tbody>${filas||'<tr><td colspan="7" style="text-align:center;color:var(--c-text3)">Sin resultados</td></tr>'}</tbody>
+      </table></div>
+      <div id="modal-pago" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:999;align-items:center;justify-content:center"></div>`;
+
   } else {
     // Vista movimientos - colapsada por participante
     const FORMAS=['Efectivo','Mercado Pago','Compensado (premios)','Tarjeta Débito','Tarjeta Crédito','Otros'];
@@ -1455,12 +1518,18 @@ function rtPagos(el){
             <td>$${m.monto.toLocaleString()}</td>
             <td>${m.forma||'—'}</td>
             <td style="color:var(--c-text2)">${m.nota||''}</td>
-            <td><button onclick="eliminarMov('${uid}',${mi})" style="background:none;border:none;cursor:pointer;color:var(--c-danger)">✕</button></td>
+            <td style="white-space:nowrap">
+              <button onclick="editarMov('${uid}',${mi})" style="background:none;border:none;cursor:pointer;color:var(--c-info);font-size:13px" title="Editar">✏</button>
+              <button onclick="eliminarMov('${uid}',${mi})" style="background:none;border:none;cursor:pointer;color:var(--c-danger);font-size:13px" title="Eliminar">✕</button>
+            </td>
           </tr>`).join('')}</tbody></table>`
         :`<p style="font-size:12px;color:var(--c-text2);margin-top:6px">Sin pagos registrados.</p>`;
       return`<div class="card pago-row" data-busq="${busqData}" style="margin-bottom:6px">
         <div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="toggleMovParticipante('${uid}',event.currentTarget)">
-          <span style="font-weight:500;font-size:13px">${nombre}</span>
+          <div>
+            <span style="font-weight:500;font-size:13px">${nombre}</span>
+            ${(()=>{const pp=allParts()[uid]||{};return pp.mail?`<br><span style="font-size:11px;color:var(--c-text2)">${pp.mail}</span>`:''})()}
+          </div>
           <div style="display:flex;gap:8px;align-items:center">
             ${resumen}
             <span class="mov-arrow" style="margin-left:6px">${abierto?'▲':'▼'}</span>
@@ -1501,47 +1570,85 @@ window.toggleMovParticipante=function(uid,el){
   if(arrow)arrow.textContent=abierto?'▼':'▲';
   if(abierto)movExpandidos.delete(uid);else movExpandidos.add(uid);
 };
+
+window.el_dataset_set=function(key,val){
+  const el=document.getElementById('tab-content');if(el)el.dataset[key]=val;
+};
 window.abrirNuevoPago=function(uid){
-  // Asegurarse que el modal existe (puede estar en cualquier vista)
-  let modal=document.getElementById('modal-pago');
-  if(!modal){
-    modal=document.createElement('div');
-    modal.id='modal-pago';
-    modal.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:999;align-items:center;justify-content:center';
-    document.body.appendChild(modal);
-  }
   const p=allParts()[uid]||{};
   const nombre=p.nombre?`${p.nombre} ${p.apellido}`:uid;
-  const hoy=new Date().toISOString().split('T')[0];
+  const hoy=new Date().toISOString().slice(0,10);
+  let modal=document.getElementById('modal-pago');
+  if(!modal){modal=document.createElement('div');modal.id='modal-pago';
+    modal.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:999;display:flex;align-items:center;justify-content:center';
+    document.body.appendChild(modal);}
   modal.style.display='flex';
-  modal.innerHTML=`<div style="background:var(--c-bg);border-radius:12px;padding:24px;width:100%;max-width:340px;box-shadow:0 8px 32px rgba(0,0,0,.25)">
-    <p style="font-weight:500;font-size:14px;margin-bottom:14px">Registrar pago — ${nombre}</p>
-    <div class="row"><label class="lbl">Monto:</label><input id="mov-monto" type="number" min="0" step="100" placeholder="$"/></div>
-    <div class="row"><label class="lbl">Fecha:</label><input id="mov-fecha" type="date" value="${hoy}"/></div>
-    <div style="margin-bottom:8px"><label style="font-size:12px;display:block;margin-bottom:4px">Forma de pago</label><select id="mov-forma" style="width:100%;padding:6px;font-size:13px;border:1px solid var(--c-border);border-radius:8px;background:var(--c-bg);color:var(--c-text)"><option value="Efectivo">Efectivo</option><option value="Mercado Pago">Mercado Pago</option><option value="Compensado (premios)">Compensado (premios)</option><option value="Tarjeta Débito">Tarjeta Débito</option><option value="Tarjeta Crédito">Tarjeta Crédito</option><option value="Otros">Otros</option></select></div><div class="row"><label class="lbl">Nota:</label><input id="mov-nota" placeholder="Opcional..."/></div>
-    <div style="display:flex;gap:8px;margin-top:10px">
+  modal.innerHTML=`<div class="card" style="min-width:300px;max-width:420px;width:90%">
+    <p style="font-weight:500;margin-bottom:12px">Nuevo pago — ${nombre}</p>
+    <div class="row"><label class="lbl">Monto $:</label>
+      <input id="mm-monto-new" type="number" min="0" step="100" placeholder="Ej: 5000" style="flex:1"/></div>
+    <div class="row"><label class="lbl">Fecha:</label>
+      <input id="mm-fecha-new" type="date" value="${hoy}" style="flex:1"/></div>
+    <div class="row"><label class="lbl">Forma:</label>
+      <select id="mm-forma-new" style="flex:1"><option value="Efectivo">Efectivo</option><option value="Mercado Pago">Mercado Pago</option><option value="Compensado (premios)">Compensado (premios)</option><option value="Tarjeta Débito">Tarjeta Débito</option><option value="Tarjeta Crédito">Tarjeta Crédito</option><option value="Otros">Otros</option></select></div>
+    <div class="row"><label class="lbl">Nota:</label>
+      <input id="mm-nota-new" placeholder="Opcional..." style="flex:1"/></div>
+    <div style="display:flex;gap:8px;margin-top:12px">
       <button class="btn btn-primary btn-sm" onclick="guardarMov('${uid}')">Guardar</button>
-      <button class="btn btn-sm" onclick="cerrarModal()">Cancelar</button>
-    </div>
-  </div>`;
-};
+      <button class="btn btn-sm" onclick="document.getElementById('modal-pago').style.display='none'">Cancelar</button>
+    </div></div>`;
+};;;
 
 window.cerrarModal=function(){
   const m=document.getElementById('modal-pago');if(m)m.style.display='none';
 };
 
-window.guardarMov=async function(uid){
-  const monto=parseFloat(document.getElementById('mov-monto').value)||0;
-  const fecha=document.getElementById('mov-fecha').value;
-  const nota=document.getElementById('mov-nota').value.trim();
-  if(!monto)return;
+window.guardarMov=async function(uid,miIdx){
+  const sfx=(miIdx!==undefined)?String(miIdx):'new';
+  const monto=parseFloat(document.getElementById('mm-monto-'+sfx)?.value)||0;
+  const fecha=document.getElementById('mm-fecha-'+sfx)?.value||'';
+  const forma=document.getElementById('mm-forma-'+sfx)?.value||'Efectivo';
+  const nota=(document.getElementById('mm-nota-'+sfx)?.value||'').trim();
+  if(!monto){alert('Ingresá un monto válido.');return;}
   const t=T();if(!t)return;
   const det=JSON.parse(JSON.stringify(t.pagosDetalle||{}));
   if(!det[uid])det[uid]=[];
-  det[uid].push({monto,fecha,nota});
-  det[uid].sort((a,b)=>a.fecha>b.fecha?1:-1);
+  if(miIdx!==undefined){det[uid][miIdx]={monto,fecha,forma,nota};}
+  else{det[uid].push({monto,fecha,forma,nota});}
+  det[uid].sort((a,b)=>(a.fecha||'')>(b.fecha||'')?1:-1);
   await fupd(`torneos/${S.torneoActivo}`,{pagosDetalle:det});
-  cerrarModal();
+  movExpandidos.add(uid);
+  const modal=document.getElementById('modal-pago');if(modal)modal.style.display='none';
+  if(typeof cerrarModal==='function')cerrarModal();
+};;
+
+window.editarMov=function(uid,mi){
+  const t=T();if(!t)return;
+  const m=(t.pagosDetalle?.[uid]||[])[mi];if(!m)return;
+  const p=allParts()[uid]||{};
+  const nombre=p.nombre?`${p.nombre} ${p.apellido}`:uid;
+  const formaActual=m.forma||'Efectivo';
+  let modal=document.getElementById('modal-pago');
+  if(!modal){modal=document.createElement('div');modal.id='modal-pago';
+    modal.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:999;display:flex;align-items:center;justify-content:center';
+    document.body.appendChild(modal);}
+  modal.style.display='flex';
+  modal.innerHTML=`<div class="card" style="min-width:300px;max-width:420px;width:90%">
+    <p style="font-weight:500;margin-bottom:12px">Editar pago — ${nombre}</p>
+    <div class="row"><label class="lbl">Monto $:</label>
+      <input id="mm-monto-${mi}" type="number" min="0" step="100" value="${m.monto}" style="flex:1"/></div>
+    <div class="row"><label class="lbl">Fecha:</label>
+      <input id="mm-fecha-${mi}" type="date" value="${m.fecha||''}" style="flex:1"/></div>
+    <div class="row"><label class="lbl">Forma:</label>
+      <select id="mm-forma-${mi}" style="flex:1">
+        ${["Efectivo","Mercado Pago","Compensado (premios)","Tarjeta Débito","Tarjeta Crédito","Otros"].map(f=>`<option value="${f}" ${f===formaActual?'selected':''}>${f}</option>`).join('')}
+      </select></div>
+    <div class="row"><label class="lbl">Nota:</label>
+      <input id="mm-nota-${mi}" value="${m.nota||''}" placeholder="Opcional..." style="flex:1"/></div>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="btn btn-primary btn-sm" onclick="guardarMov('${uid}',${mi})">Guardar cambios</button>
+      <button class="btn btn-sm" onclick="document.getElementById('modal-pago').style.display='none'">Cancelar</button>
+    </div></div>`;
 };
 
 window.eliminarMov=async function(uid,mi){
