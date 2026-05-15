@@ -99,7 +99,7 @@ import { getAuth, onAuthStateChanged, signOut, GoogleAuthProvider, signInWithPop
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
 // 🔧 CONFIGURACIÓN FIREBASE
-const APP_BUILD=65;
+const APP_BUILD=66;
 // Leer ?ref= de la URL y guardarlo en sessionStorage
 (function(){
   const params=new URLSearchParams(window.location.search);
@@ -1224,13 +1224,13 @@ window.togglePT=async function(uid){
       await fupd(`torneos/${S.torneoActivo}`,{participantes:lista});
     }
   } else if(enLiga&&yaQuitado){
-    // → Reincorporar: limpiar ausencias de fechas no terminadas
+    // → Reincorporar: ELIMINAR claves del participante (estado neutro: en liga pero no habilitado)
     const ausR=JSON.parse(JSON.stringify(t.ausencias||{}));
     fechas.forEach((f,fi)=>{
       if(f.estado!=='terminada'){
-        ausR[`${fi}-${uid}`]=false;
+        delete ausR[`${fi}-${uid}`];
         const nJ=t.jugadas?.[`${fi}-${uid}`]||1;
-        for(let j=0;j<nJ;j++) ausR[`${fi}-${uid}-${j}`]=false;
+        for(let j=0;j<nJ;j++) delete ausR[`${fi}-${uid}-${j}`];
       }
     });
     const quitadosR=(t.quitados||[]).filter(u=>u!==uid);
